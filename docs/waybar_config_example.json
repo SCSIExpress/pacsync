@@ -1,0 +1,64 @@
+{
+  "modules-left": ["sway/workspaces", "sway/mode"],
+  "modules-center": ["sway/window"],
+  "modules-right": ["pacman-sync", "network", "pulseaudio", "battery", "clock"],
+  
+  "pacman-sync": {
+    "exec": "python /path/to/pacman-sync-utility/client/main.py --status --json",
+    "exec-if": "which pacman",
+    "interval": 30,
+    "return-type": "json",
+    "format": "{icon}",
+    "format-icons": {
+      "in_sync": "✓",
+      "ahead": "↑",
+      "behind": "↓",
+      "offline": "⚠",
+      "syncing": "⟳",
+      "error": "✗",
+      "unknown": "?"
+    },
+    "tooltip": true,
+    "on-click": "python /path/to/pacman-sync-utility/client/main.py --waybar-click left --waybar-action sync",
+    "on-click-right": "python /path/to/pacman-sync-utility/client/main.py --waybar-click right --waybar-action show_menu",
+    "on-click-middle": "python /path/to/pacman-sync-utility/client/main.py --waybar-click middle --waybar-action set_latest",
+    "signal": 10
+  },
+  
+  "network": {
+    "format-wifi": "{essid} ({signalStrength}%) ",
+    "format-ethernet": "{ifname}: {ipaddr}/{cidr} ",
+    "format-disconnected": "Disconnected ⚠"
+  },
+  
+  "pulseaudio": {
+    "format": "{volume}% {icon}",
+    "format-bluetooth": "{volume}% {icon}",
+    "format-muted": "",
+    "format-icons": {
+      "headphones": "",
+      "handsfree": "",
+      "headset": "",
+      "phone": "",
+      "portable": "",
+      "car": "",
+      "default": ["", ""]
+    },
+    "on-click": "pavucontrol"
+  },
+  
+  "battery": {
+    "states": {
+      "good": 95,
+      "warning": 30,
+      "critical": 15
+    },
+    "format": "{capacity}% {icon}",
+    "format-icons": ["", "", "", "", ""]
+  },
+  
+  "clock": {
+    "format-alt": "{:%Y-%m-%d}",
+    "format": "{:%H:%M}"
+  }
+}

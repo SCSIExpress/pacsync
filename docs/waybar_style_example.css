@@ -1,0 +1,187 @@
+/* WayBar CSS styling for Pacman Sync Utility */
+
+/* Base styling for the pacman-sync module */
+#pacman-sync {
+    background-color: #2e3440;
+    color: #d8dee9;
+    border-radius: 5px;
+    padding: 0 10px;
+    margin: 0 5px;
+    font-family: "Font Awesome 5 Free", monospace;
+    font-size: 14px;
+    min-width: 30px;
+    text-align: center;
+}
+
+/* Status-specific styling */
+#pacman-sync.in-sync {
+    background-color: #a3be8c;
+    color: #2e3440;
+}
+
+#pacman-sync.ahead {
+    background-color: #ebcb8b;
+    color: #2e3440;
+}
+
+#pacman-sync.behind {
+    background-color: #5e81ac;
+    color: #eceff4;
+}
+
+#pacman-sync.offline {
+    background-color: #4c566a;
+    color: #d8dee9;
+}
+
+#pacman-sync.syncing {
+    background-color: #88c0d0;
+    color: #2e3440;
+    animation: pulse 2s infinite;
+}
+
+#pacman-sync.error {
+    background-color: #bf616a;
+    color: #eceff4;
+}
+
+#pacman-sync.unknown {
+    background-color: #4c566a;
+    color: #d8dee9;
+    opacity: 0.7;
+}
+
+/* Stale status indicator */
+#pacman-sync.stale {
+    opacity: 0.6;
+    border: 1px dashed #d08770;
+}
+
+/* Hover effects */
+#pacman-sync:hover {
+    background-color: #3b4252;
+    color: #eceff4;
+    cursor: pointer;
+}
+
+#pacman-sync.in-sync:hover {
+    background-color: #8fbcbb;
+}
+
+#pacman-sync.ahead:hover {
+    background-color: #d08770;
+}
+
+#pacman-sync.behind:hover {
+    background-color: #81a1c1;
+}
+
+#pacman-sync.error:hover {
+    background-color: #d08770;
+}
+
+/* Pulse animation for syncing status */
+@keyframes pulse {
+    0% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+    100% {
+        opacity: 1;
+    }
+}
+
+/* Tooltip styling (if supported by your WayBar theme) */
+tooltip {
+    background-color: #2e3440;
+    color: #d8dee9;
+    border: 1px solid #4c566a;
+    border-radius: 5px;
+    padding: 5px 10px;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+/* Alternative color schemes */
+
+/* Light theme variant */
+@media (prefers-color-scheme: light) {
+    #pacman-sync {
+        background-color: #eceff4;
+        color: #2e3440;
+    }
+    
+    #pacman-sync.in-sync {
+        background-color: #a3be8c;
+        color: #2e3440;
+    }
+    
+    #pacman-sync.ahead {
+        background-color: #ebcb8b;
+        color: #2e3440;
+    }
+    
+    #pacman-sync.behind {
+        background-color: #5e81ac;
+        color: #eceff4;
+    }
+    
+    #pacman-sync.offline {
+        background-color: #d8dee9;
+        color: #4c566a;
+    }
+    
+    #pacman-sync.syncing {
+        background-color: #88c0d0;
+        color: #2e3440;
+    }
+    
+    #pacman-sync.error {
+        background-color: #bf616a;
+        color: #eceff4;
+    }
+}
+
+/* High contrast variant */
+.high-contrast #pacman-sync {
+    border: 2px solid;
+    font-weight: bold;
+}
+
+.high-contrast #pacman-sync.in-sync {
+    background-color: #00ff00;
+    color: #000000;
+    border-color: #008000;
+}
+
+.high-contrast #pacman-sync.ahead {
+    background-color: #ffff00;
+    color: #000000;
+    border-color: #808000;
+}
+
+.high-contrast #pacman-sync.behind {
+    background-color: #0080ff;
+    color: #ffffff;
+    border-color: #004080;
+}
+
+.high-contrast #pacman-sync.offline {
+    background-color: #808080;
+    color: #ffffff;
+    border-color: #404040;
+}
+
+.high-contrast #pacman-sync.syncing {
+    background-color: #00ffff;
+    color: #000000;
+    border-color: #008080;
+}
+
+.high-contrast #pacman-sync.error {
+    background-color: #ff0000;
+    color: #ffffff;
+    border-color: #800000;
+}
