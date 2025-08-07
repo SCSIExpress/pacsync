@@ -249,16 +249,22 @@ class PacmanSyncApplication(QApplication):
         self._initialize_application()
     
     def _initialize_application(self) -> None:
-        """Initialize the Qt application components."""
+        """Initialize the Qt application components with graceful degradation."""
         # Check system tray availability
         if not QSystemTrayIcon.isSystemTrayAvailable():
-            QMessageBox.critical(
+            logger.warning("System tray is not available on this system")
+            
+            # Set up graceful degradation
+            self._setup_fallback_mode()
+            
+            # Show informational message instead of critical error
+            QMessageBox.information(
                 None, 
-                "System Tray",
+                "System Tray Unavailable",
                 "System tray is not available on this system. "
-                "The application will run in command-line mode only."
+                "The application will continue to run with limited notification capabilities. "
+                "You can still use command-line operations and check logs for status updates."
             )
-            logger.error("System tray not available")
             return
         
         # Initialize status indicator
@@ -271,6 +277,79 @@ class PacmanSyncApplication(QApplication):
         self._status_update_timer.start(30000)  # Update every 30 seconds
         
         logger.info("Qt application initialized successfully")
+    
+    def _setup_fallback_mode(self):
+        """Set up fallback mode when system tray is unavailable."""
+        logger.info("Setting up fallback mode for system tray unavailability")
+        
+        # Create a minimal status indicator that logs instead of showing tray icons
+        self._status_indicator = None
+        
+        # Set up file-based status reporting
+        self._setup_file_status_reporting()
+        
+        # Set up periodic status updates with console output
+        self._status_update_timer = QTimer(self)
+        self._status_update_timer.timeout.connect(self._update_status_fallback)
+        self._status_update_timer.start(60000)  # Update every minute in fallback mode
+    
+    def _setup_file_status_reporting(self):
+        """Set up file-based status reporting for fallback mode."""
+        try:
+            import os
+            from pathlib import Path
+            
+            # Create status directory
+            status_dir = Path.home() / '.pacman-sync'
+            status_dir.mkdir(exist_ok=True)
+            
+            self._status_file = status_dir / 'status.txt'
+            self._write_status_file("OFFLINE", "System tray unavailable - running in fallback mode")
+            
+            logger.info(f"Status file created at: {self._status_file}")
+            
+        except Exception as e:
+            logger.error(f"Failed to set up file status reporting: {e}")
+            self._status_file = None
+    
+    def _write_status_file(self, status: str, message: str):
+        """Write status to file for fallback mode."""
+        if not hasattr(self, '_status_file') or not self._status_file:
+            return
+        
+        try:
+            from datetime import datetime
+            
+            status_content = f"""Pacman Sync Utility Status
+Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Status: {status}
+Message: {message}
+
+Note: System tray is not available. Check this file for status updates.
+Use command-line options for operations: --sync, --set-latest, --revert, --status
+"""
+            
+            with open(self._status_file, 'w') as f:
+                f.write(status_content)
+                
+        except Exception as e:
+            logger.error(f"Failed to write status file: {e}")
+    
+    def _update_status_fallback(self):
+        """Update status in fallback mode."""
+        if self._status_update_callback:
+            try:
+                self._status_update_callback()
+            except Exception as e:
+                logger.error(f"Status update failed in fallback mode: {e}")
+        
+        # Update status file
+        current_status = self.get_sync_status()
+        if current_status:
+            self._write_status_file(
+                current_status.value.upper(),
+                f"Application running in fallback mode (no system tray)"
+            )
     
     def _connect_status_indicator_signals(self) -> None:
         """Connect status indicator signals to application handlers."""
@@ -500,11 +579,81 @@ class PacmanSyncApplication(QApplication):
     
     def show_notification(self, title: str, message: str, 
                          is_error: bool = False) -> None:
-        """Show a system notification."""
+        """Show a system notification with graceful degradation."""
         if self._status_indicator:
             icon = (QSystemTrayIcon.MessageIcon.Critical if is_error 
                    else QSystemTrayIcon.MessageIcon.Information)
             self._status_indicator.show_message(title, message, icon)
+        else:
+            # Fallback notification methods
+            self._show_fallback_notification(title, message, is_error)
+    
+    def _show_fallback_notification(self, title: str, message: str, is_error: bool = False):
+        """Show notification when system tray is unavailable."""
+        # Log the notification
+        log_level = logging.ERROR if is_error else logging.INFO
+        logger.log(log_level, f"NOTIFICATION: {title} - {message}")
+        
+        # Print to console
+        prefix = "ERROR" if is_error else "INFO"
+        print(f"[{prefix}] {title}: {message}")
+        
+        # Update status file if available
+        if hasattr(self, '_status_file') and self._status_file:
+            try:
+                status = "ERROR" if is_error else "INFO"
+                self._write_status_file(status, f"{title}: {message}")
+            except Exception as e:
+                logger.error(f"Failed to update status file with notification: {e}")
+        
+        # Try desktop notifications as fallback
+        self._try_desktop_notification(title, message, is_error)
+    
+    def _try_desktop_notification(self, title: str, message: str, is_error: bool = False):
+        """Try to show desktop notification using system tools."""
+        try:
+            import subprocess
+            import shutil
+            
+            # Try notify-send (Linux)
+            if shutil.which('notify-send'):
+                urgency = 'critical' if is_error else 'normal'
+                subprocess.run([
+                    'notify-send',
+                    '--urgency', urgency,
+                    '--app-name', 'Pacman Sync Utility',
+                    title,
+                    message
+                ], check=False, timeout=5)
+                logger.debug("Desktop notification sent via notify-send")
+                return
+            
+            # Try osascript (macOS)
+            if shutil.which('osascript'):
+                script = f'display notification "{message}" with title "{title}"'
+                subprocess.run(['osascript', '-e', script], check=False, timeout=5)
+                logger.debug("Desktop notification sent via osascript")
+                return
+            
+            # Try PowerShell (Windows)
+            if shutil.which('powershell'):
+                script = f'''
+                Add-Type -AssemblyName System.Windows.Forms
+                $notification = New-Object System.Windows.Forms.NotifyIcon
+                $notification.Icon = [System.Drawing.SystemIcons]::Information
+                $notification.BalloonTipTitle = "{title}"
+                $notification.BalloonTipText = "{message}"
+                $notification.Visible = $true
+                $notification.ShowBalloonTip(5000)
+                '''
+                subprocess.run(['powershell', '-Command', script], check=False, timeout=10)
+                logger.debug("Desktop notification sent via PowerShell")
+                return
+            
+            logger.debug("No desktop notification system found")
+            
+        except Exception as e:
+            logger.debug(f"Failed to send desktop notification: {e}")
     
     def is_system_tray_available(self) -> bool:
         """Check if system tray functionality is available."""

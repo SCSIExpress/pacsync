@@ -21,6 +21,7 @@ from shared.models import (
     SyncOperation, Repository, RepositoryPackage, PackageState
 )
 from shared.interfaces import IAPIClient
+from client.auth.token_manager import TokenManager
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +82,8 @@ class PacmanSyncAPIClient(IAPIClient):
         self.timeout = ClientTimeout(total=timeout)
         self.retry_config = retry_config or RetryConfig()
         
-        # Authentication state
-        self._auth_token: Optional[str] = None
-        self._endpoint_id: Optional[str] = None
-        self._endpoint_name: Optional[str] = None
-        self._token_expires_at: Optional[datetime] = None
+        # Token manager for secure authentication
+        self.token_manager = TokenManager(api_client=self)
         
         # Session management
         self._session: Optional[ClientSession] = None
@@ -133,8 +131,9 @@ class PacmanSyncAPIClient(IAPIClient):
     def _get_auth_headers(self) -> Dict[str, str]:
         """Get authentication headers."""
         headers = {}
-        if self._auth_token:
-            headers['Authorization'] = f'Bearer {self._auth_token}'
+        token = self.token_manager.get_current_token()
+        if token:
+            headers['Authorization'] = f'Bearer {token}'
         return headers
     
     async def _make_request(
@@ -199,10 +198,19 @@ class PacmanSyncAPIClient(IAPIClient):
                             return {}
                     
                     elif response.status == 401:
-                        # Authentication error - clear token and raise
-                        self._auth_token = None
-                        self._token_expires_at = None
+                        # Authentication error - try to refresh token
                         error_data = await self._get_error_response(response)
+                        
+                        # Attempt token refresh if we have a token manager
+                        if self.token_manager.is_authenticated() and attempt == 0:
+                            logger.info("Attempting token refresh due to 401 error")
+                            refresh_success = await self.token_manager.refresh_token()
+                            if refresh_success:
+                                # Retry with new token
+                                continue
+                        
+                        # Clear authentication state and raise error
+                        self.token_manager.logout()
                         raise AuthenticationError(f"Authentication failed: {error_data.get('detail', 'Unauthorized')}")
                     
                     elif response.status == 403:
@@ -288,25 +296,20 @@ class PacmanSyncAPIClient(IAPIClient):
         try:
             logger.info(f"Authenticating endpoint: {endpoint_name}@{hostname}")
             
-            response = await self._make_request(
-                method='POST',
-                endpoint='/api/endpoints/register',
-                data={
-                    'name': endpoint_name,
-                    'hostname': hostname
-                },
-                authenticated=False
+            # Use token manager for authentication
+            success = await self.token_manager.authenticate(
+                endpoint_name, hostname, self.server_url
             )
             
-            self._auth_token = response['auth_token']
-            self._endpoint_id = response['endpoint']['id']
-            self._endpoint_name = endpoint_name
+            if not success:
+                raise AuthenticationError("Authentication failed")
             
-            # Set token expiration (assume 24 hours if not specified)
-            self._token_expires_at = datetime.now() + timedelta(hours=24)
+            token = self.token_manager.get_current_token()
+            if not token:
+                raise AuthenticationError("No token received after authentication")
             
-            logger.info(f"Authentication successful. Endpoint ID: {self._endpoint_id}")
-            return self._auth_token
+            logger.info(f"Authentication successful. Endpoint ID: {self.token_manager.get_current_endpoint_id()}")
+            return token
             
         except NetworkError as e:
             logger.error(f"Network error during authentication: {e}")
@@ -326,15 +329,27 @@ class PacmanSyncAPIClient(IAPIClient):
         Returns:
             Endpoint registration data
         """
-        # This is the same as authenticate for this implementation
-        await self.authenticate(name, hostname)
-        
-        return {
-            'endpoint_id': self._endpoint_id,
-            'name': name,
-            'hostname': hostname,
-            'auth_token': self._auth_token
-        }
+        try:
+            response = await self._make_request(
+                method='POST',
+                endpoint='/api/endpoints/register',
+                data={
+                    'name': name,
+                    'hostname': hostname
+                },
+                authenticated=False
+            )
+            
+            return {
+                'endpoint_id': response['endpoint']['id'],
+                'name': name,
+                'hostname': hostname,
+                'auth_token': response['auth_token']
+            }
+            
+        except Exception as e:
+            logger.error(f"Endpoint registration failed: {e}")
+            raise AuthenticationError(f"Failed to register endpoint: {str(e)}")
     
     async def report_status(self, endpoint_id: str, status: SyncStatus) -> bool:
         """
@@ -722,19 +737,27 @@ class PacmanSyncAPIClient(IAPIClient):
     
     def get_endpoint_info(self) -> Optional[Dict[str, str]]:
         """Get current endpoint information."""
-        if self._endpoint_id and self._endpoint_name:
+        endpoint_id = self.token_manager.get_current_endpoint_id()
+        token = self.token_manager.get_current_token()
+        
+        if endpoint_id:
+            # Get endpoint name from stored token data
+            stored_endpoints = self.token_manager.get_stored_endpoints()
+            endpoint_name = None
+            for endpoint in stored_endpoints:
+                if endpoint['endpoint_id'] == endpoint_id:
+                    endpoint_name = endpoint['endpoint_name']
+                    break
+            
             return {
-                'endpoint_id': self._endpoint_id,
-                'endpoint_name': self._endpoint_name,
-                'auth_token': self._auth_token or '',
-                'is_authenticated': bool(self._auth_token)
+                'endpoint_id': endpoint_id,
+                'endpoint_name': endpoint_name or 'unknown',
+                'auth_token': token or '',
+                'is_authenticated': self.token_manager.is_authenticated()
             }
         return None
     
     def clear_authentication(self) -> None:
         """Clear authentication state."""
-        self._auth_token = None
-        self._endpoint_id = None
-        self._endpoint_name = None
-        self._token_expires_at = None
+        self.token_manager.logout()
         logger.info("Authentication state cleared")

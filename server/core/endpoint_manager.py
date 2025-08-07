@@ -28,10 +28,11 @@ class EndpointAuthenticationError(Exception):
 class EndpointManager(IEndpointManager):
     """Manages endpoint registration, authentication, and status updates."""
     
-    def __init__(self, db_manager: DatabaseManager, jwt_secret: str = None):
+    def __init__(self, db_manager: DatabaseManager, jwt_secret: str = None, jwt_expiration_hours: int = 24 * 30):
         self.db = db_manager
         self.orm = ORMManager(db_manager)
         self.jwt_secret = jwt_secret or secrets.token_urlsafe(32)
+        self.jwt_expiration_hours = jwt_expiration_hours
         
     async def register_endpoint(self, name: str, hostname: str) -> Endpoint:
         """Register a new endpoint."""
@@ -138,7 +139,7 @@ class EndpointManager(IEndpointManager):
             'endpoint_id': endpoint_id,
             'endpoint_name': endpoint_name,
             'issued_at': datetime.now().timestamp(),
-            'expires_at': (datetime.now().timestamp() + 86400 * 30)  # 30 days
+            'expires_at': (datetime.now().timestamp() + 3600 * self.jwt_expiration_hours)
         }
         
         return jwt.encode(payload, self.jwt_secret, algorithm='HS256')

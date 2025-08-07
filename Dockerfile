@@ -79,9 +79,9 @@ USER appuser
 # Expose port
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${HTTP_PORT:-8080}/health || exit 1
+# Health check with enhanced monitoring
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:${HTTP_PORT:-8080}/health/ready || exit 1
 
 # Default environment variables for development
 ENV DATABASE_TYPE=internal
@@ -124,9 +124,9 @@ USER appuser
 # Expose port
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${HTTP_PORT:-8080}/health || exit 1
+# Health check with enhanced monitoring
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:${HTTP_PORT:-8080}/health/ready || exit 1
 
 # Default environment variables for production
 ENV DATABASE_TYPE=internal

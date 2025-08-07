@@ -18,22 +18,43 @@ from server.database.connection import DatabaseManager
 from server.database.schema import create_tables, verify_schema
 from server.core.pool_manager import PackagePoolManager
 from server.core.sync_coordinator import SyncCoordinator
+from server.middleware.auth import create_auth_dependencies, add_security_headers
+from server.middleware.rate_limiting import create_rate_limit_middleware
+from server.middleware.validation import validation_middleware
 from server.api.pools import router as pools_router
 from server.api.endpoints import router as endpoints_router
 from server.api.sync import router as sync_router
 from server.api.repositories import router as repositories_router
+from server.api.health import router as health_router
+
+# Import enhanced error handling
+from shared.exceptions import (
+    PacmanSyncError, ErrorCode, create_error_response, handle_exception
+)
+from shared.logging_config import (
+    setup_logging, LogLevel, LogFormat, AuditLogger, OperationLogger,
+    log_structured_error
+)
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager."""
+    """Application lifespan manager with graceful shutdown support."""
     logger.info("Starting Pacman Sync Utility Server...")
+    
+    # Set up graceful shutdown handler
+    from server.core.shutdown_handler import setup_graceful_shutdown, shutdown_cleanup
+    shutdown_handler = setup_graceful_shutdown(shutdown_timeout=30)
+    shutdown_handler.register_cleanup_task(shutdown_cleanup)
     
     # Initialize database
     db_manager = DatabaseManager()
     await db_manager.initialize()
+    
+    # Register database cleanup
+    shutdown_handler.register_cleanup_task(db_manager.close)
     
     # Create tables if they don't exist
     if not await verify_schema(db_manager):
@@ -46,21 +67,30 @@ async def lifespan(app: FastAPI):
     
     # Import and initialize endpoint manager
     from server.core.endpoint_manager import EndpointManager
-    endpoint_manager = EndpointManager(db_manager)
+    endpoint_manager = EndpointManager(
+        db_manager, 
+        jwt_secret=config.security.jwt_secret_key,
+        jwt_expiration_hours=config.security.jwt_expiration_hours
+    )
     
     # Store in app state for access in routes
     app.state.db_manager = db_manager
     app.state.pool_manager = pool_manager
     app.state.sync_coordinator = sync_coordinator
     app.state.endpoint_manager = endpoint_manager
+    app.state.shutdown_handler = shutdown_handler
+    
+    # Mark service as ready
+    from server.api.health import mark_service_ready
+    mark_service_ready()
     
     logger.info("Server initialization complete")
     
     yield
     
-    # Cleanup
-    logger.info("Shutting down server...")
-    await db_manager.close()
+    # Graceful shutdown
+    logger.info("Initiating graceful shutdown...")
+    await shutdown_handler.initiate_shutdown()
 
 
 def create_app() -> FastAPI:
@@ -84,56 +114,104 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     
-    # Add custom exception handlers
+    # Add rate limiting middleware
+    if config.security.enable_rate_limiting:
+        rate_limit_middleware = create_rate_limit_middleware(
+            default_limit=config.security.api_rate_limit
+        )
+        app.middleware("http")(rate_limit_middleware)
+    
+    # Create authentication dependencies
+    authenticate_endpoint, authenticate_admin = create_auth_dependencies(
+        jwt_secret=config.security.jwt_secret_key,
+        admin_tokens=config.security.admin_tokens
+    )
+    
+    # Store auth dependencies in app state for use in routers
+    app.state.authenticate_endpoint = authenticate_endpoint
+    app.state.authenticate_admin = authenticate_admin
+    
+    # Add security headers middleware
+    @app.middleware("http")
+    async def security_headers_middleware(request: Request, call_next):
+        response = await call_next(request)
+        return add_security_headers(response, request)
+    
+    # Set up audit and operation loggers
+    audit_logger = AuditLogger("server_audit")
+    operation_logger = OperationLogger("server_operations")
+    
+    # Store loggers in app state
+    app.state.audit_logger = audit_logger
+    app.state.operation_logger = operation_logger
+    
+    # Add enhanced exception handlers
+    @app.exception_handler(PacmanSyncError)
+    async def pacman_sync_error_handler(request: Request, exc: PacmanSyncError):
+        """Handle structured PacmanSyncError exceptions."""
+        # Log the structured error
+        log_structured_error(logger, exc)
+        
+        # Audit log the error
+        audit_logger.log_error(exc)
+        
+        return JSONResponse(
+            status_code=exc.get_http_status_code(),
+            content=create_error_response(exc)
+        )
+    
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
+        """Handle FastAPI HTTP exceptions with structured error format."""
+        # Convert to structured error
+        structured_error = handle_exception(
+            exc,
+            context={
+                'request_method': request.method,
+                'request_path': str(request.url.path),
+                'status_code': exc.status_code,
+                'client_host': request.client.host if request.client else None
+            }
+        )
+        
+        # Log the error
+        log_structured_error(logger, structured_error)
+        
         return JSONResponse(
             status_code=exc.status_code,
-            content={
-                "error": {
-                    "code": f"HTTP_{exc.status_code}",
-                    "message": exc.detail,
-                    "timestamp": "2025-01-15T10:30:00Z"  # In real app, use datetime.now()
-                }
-            }
+            content=create_error_response(structured_error)
         )
     
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
+        """Handle unexpected exceptions with structured error format."""
+        # Convert to structured error
+        structured_error = handle_exception(
+            exc,
+            context={
+                'request_method': request.method,
+                'request_path': str(request.url.path),
+                'client_host': request.client.host if request.client else None,
+                'handler': 'general_exception_handler'
+            },
+            default_error_code=ErrorCode.INTERNAL_UNEXPECTED_ERROR
+        )
+        
+        # Log the error with full traceback
         logger.error(f"Unhandled exception: {exc}", exc_info=True)
+        log_structured_error(logger, structured_error)
+        
+        # Audit log critical errors
+        if structured_error.severity.value in ['high', 'critical']:
+            audit_logger.log_error(structured_error)
+        
         return JSONResponse(
-            status_code=500,
-            content={
-                "error": {
-                    "code": "INTERNAL_SERVER_ERROR",
-                    "message": "An internal server error occurred",
-                    "timestamp": "2025-01-15T10:30:00Z"
-                }
-            }
+            status_code=structured_error.get_http_status_code(),
+            content=create_error_response(structured_error)
         )
     
-    # Health check endpoint
-    @app.get("/health")
-    async def health_check():
-        """Health check endpoint for Docker and monitoring."""
-        try:
-            from server.database.connection import get_database_manager
-            db_manager = get_database_manager()
-            
-            # Test database connection
-            await db_manager.execute("SELECT 1")
-            
-            return {
-                "status": "healthy",
-                "timestamp": "2025-01-15T10:30:00Z",
-                "database": "connected",
-                "version": "1.0.0"
-            }
-        except Exception as e:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=503, detail=f"Database connection failed: {str(e)}")
-    
     # Include API routers
+    app.include_router(health_router, tags=["health"])
     app.include_router(pools_router, prefix="/api", tags=["pools"])
     app.include_router(endpoints_router, prefix="/api", tags=["endpoints"])
     app.include_router(sync_router, prefix="/api", tags=["sync"])
@@ -164,11 +242,6 @@ def create_app() -> FastAPI:
             
             # Otherwise serve index.html for SPA routing
             return FileResponse(os.path.join(web_dist_path, "index.html"))
-    
-    # Health check endpoint
-    @app.get("/health")
-    async def health_check():
-        return {"status": "healthy", "service": "pacman-sync-utility"}
     
     return app
 

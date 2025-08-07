@@ -41,7 +41,12 @@ class ServerConfig:
 class SecurityConfig:
     """Security-related configuration settings."""
     jwt_secret_key: str
+    jwt_algorithm: str
+    jwt_expiration_hours: int
     api_rate_limit: int
+    admin_tokens: List[str]
+    enable_rate_limiting: bool
+    max_request_size: int
 
 
 @dataclass
@@ -140,7 +145,12 @@ def load_config() -> AppConfig:
     # Security configuration
     security_config = SecurityConfig(
         jwt_secret_key=os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production"),
-        api_rate_limit=get_env_int("API_RATE_LIMIT", 100)
+        jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
+        jwt_expiration_hours=get_env_int("JWT_EXPIRATION_HOURS", 24 * 30),  # 30 days
+        api_rate_limit=get_env_int("API_RATE_LIMIT", 100),
+        admin_tokens=get_env_list("ADMIN_TOKENS", []),
+        enable_rate_limiting=get_env_bool("ENABLE_RATE_LIMITING", True),
+        max_request_size=get_env_int("MAX_REQUEST_SIZE", 10485760)  # 10MB
     )
     
     # Feature configuration
@@ -166,29 +176,52 @@ def load_config() -> AppConfig:
     )
 
 
-def setup_logging(config: AppConfig) -> None:
-    """Setup logging configuration based on config."""
-    log_level = getattr(logging, config.server.log_level.upper(), logging.INFO)
+def setup_logging(config: AppConfig) -> Dict[str, logging.Logger]:
+    """Setup comprehensive logging configuration based on config."""
+    from shared.logging_config import setup_logging as setup_comprehensive_logging, LogLevel, LogFormat
     
-    if config.server.structured_logging:
-        # JSON structured logging format
-        log_format = '{"timestamp": "%(asctime)s", "level": "%(levelname)s", "logger": "%(name)s", "message": "%(message)s"}'
-    else:
-        # Standard logging format
-        log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    # Map config values to enum values
+    log_level = LogLevel(config.server.log_level.upper())
+    log_format = LogFormat.JSON if config.server.structured_logging else LogFormat.STANDARD
     
-    logging.basicConfig(
-        level=log_level,
-        format=log_format,
-        datefmt='%Y-%m-%d %H:%M:%S'
+    # Determine log file paths
+    log_file = None
+    audit_file = None
+    
+    if config.server.environment == "production":
+        log_file = "logs/server.log"
+        audit_file = "logs/audit.log"
+    elif config.server.environment == "development":
+        log_file = "logs/server-dev.log"
+        audit_file = "logs/audit-dev.log"
+    
+    # Set up comprehensive logging
+    loggers = setup_comprehensive_logging(
+        log_level=log_level,
+        log_format=log_format,
+        log_file=log_file,
+        max_file_size=10 * 1024 * 1024,  # 10MB
+        backup_count=config.monitoring.log_backup_count,
+        enable_console=True,
+        enable_audit=True,
+        audit_file=audit_file
     )
     
-    # Set specific logger levels
+    # Set specific logger levels for server components
     if config.server.environment == "development":
         logging.getLogger("uvicorn").setLevel(logging.DEBUG)
         logging.getLogger("uvicorn.access").setLevel(logging.DEBUG)
+        logging.getLogger("database").setLevel(logging.DEBUG)
     else:
         logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+        logging.getLogger("database").setLevel(logging.INFO)
+    
+    # Set up request logging
+    logging.getLogger("api").setLevel(logging.INFO)
+    logging.getLogger("sync").setLevel(logging.INFO)
+    logging.getLogger("package").setLevel(logging.INFO)
+    
+    return loggers
 
 
 # Global configuration instance

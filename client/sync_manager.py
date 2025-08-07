@@ -18,7 +18,13 @@ from client.qt.application import SyncStatus
 from client.package_operations import PackageSynchronizer, StateManager, PackageOperationError
 from client.pacman_interface import PacmanInterface
 from client.status_persistence import StatusPersistenceManager
+from client.error_handling import ClientErrorHandler, ErrorDisplayMode, setup_client_error_handling
 from shared.models import OperationType, SystemState, Repository
+from shared.exceptions import (
+    PacmanSyncError, ErrorCode, NetworkError as SharedNetworkError,
+    AuthenticationError as SharedAuthError, RecoveryAction
+)
+from shared.logging_config import setup_logging, LogLevel, LogFormat, log_structured_error
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +290,17 @@ class SyncManager(QObject):
         self._is_authenticated = False
         self._endpoint_id: Optional[str] = None
         
+        # Set up enhanced logging
+        self._setup_logging(config)
+        
+        # Initialize error handler
+        self._error_handler = ClientErrorHandler(self)
+        self._error_handler.set_display_mode(ErrorDisplayMode.BOTH)
+        self._error_handler.set_show_technical_details(config.get_debug_mode())
+        
+        # Register recovery callbacks
+        self._setup_recovery_callbacks()
+        
         # Initialize status persistence
         self._status_persistence = StatusPersistenceManager()
         
@@ -322,7 +339,91 @@ class SyncManager(QObject):
         self._retry_timer.timeout.connect(self._retry_connection)
         self._retry_timer.setSingleShot(True)
         
-        logger.info("Sync manager initialized")
+        logger.info("Sync manager initialized with enhanced error handling")
+    
+    def _setup_logging(self, config: ClientConfiguration):
+        """Set up comprehensive logging for the client."""
+        try:
+            # Determine log level and format
+            log_level = LogLevel.DEBUG if config.get_debug_mode() else LogLevel.INFO
+            log_format = LogFormat.JSON if config.get_structured_logging() else LogFormat.STANDARD
+            
+            # Set up log files
+            log_file = config.get_log_file() if config.get_log_file() else None
+            audit_file = None
+            
+            if log_file:
+                # Create audit file path based on log file
+                import os
+                log_dir = os.path.dirname(log_file)
+                audit_file = os.path.join(log_dir, "client-audit.log")
+            
+            # Set up comprehensive logging
+            setup_logging(
+                log_level=log_level,
+                log_format=log_format,
+                log_file=log_file,
+                enable_console=not config.get_quiet_mode(),
+                enable_audit=True,
+                audit_file=audit_file
+            )
+            
+            logger.info("Enhanced logging configured")
+            
+        except Exception as e:
+            # Fallback to basic logging if enhanced setup fails
+            logging.basicConfig(level=logging.INFO)
+            logger.warning(f"Failed to set up enhanced logging, using basic logging: {e}")
+    
+    def _setup_recovery_callbacks(self):
+        """Set up recovery callbacks for error handling."""
+        self._error_handler.register_recovery_callback(
+            RecoveryAction.RECONNECT, 
+            self._recovery_reconnect
+        )
+        
+        self._error_handler.register_recovery_callback(
+            RecoveryAction.REFRESH_TOKEN,
+            self._recovery_refresh_token
+        )
+        
+        self._error_handler.register_recovery_callback(
+            RecoveryAction.RETRY,
+            self._recovery_retry_last_operation
+        )
+        
+        logger.debug("Recovery callbacks registered")
+    
+    def _recovery_reconnect(self) -> bool:
+        """Recovery callback for reconnection."""
+        try:
+            self._authenticate()
+            return True
+        except Exception as e:
+            logger.error(f"Recovery reconnection failed: {e}")
+            return False
+    
+    def _recovery_refresh_token(self) -> bool:
+        """Recovery callback for token refresh."""
+        try:
+            # Clear current authentication
+            self._api_client.clear_authentication()
+            self._is_authenticated = False
+            self._endpoint_id = None
+            
+            # Attempt re-authentication
+            self._authenticate()
+            return True
+        except Exception as e:
+            logger.error(f"Recovery token refresh failed: {e}")
+            return False
+    
+    def _recovery_retry_last_operation(self) -> bool:
+        """Recovery callback for retrying the last operation."""
+        # This would retry the last failed operation
+        # For now, just return True as a placeholder
+        logger.info("Retry recovery action triggered")
+        return True
     
     def start(self):
         """Start the sync manager and attempt initial authentication."""
@@ -430,11 +531,36 @@ class SyncManager(QObject):
     
     @pyqtSlot(str, str)
     def _on_error_occurred(self, error_type: str, message: str):
-        """Handle errors from worker."""
+        """Handle errors from worker with enhanced error handling."""
         logger.error(f"Worker error ({error_type}): {message}")
         
+        # Create appropriate structured error
         if 'network' in error_type.lower() or 'connection' in message.lower():
+            error = SharedNetworkError(
+                message=message,
+                error_code=ErrorCode.NETWORK_CONNECTION_FAILED,
+                context={'error_type': error_type, 'source': 'worker_thread'}
+            )
             self._update_status(SyncStatus.OFFLINE)
+        elif 'auth' in error_type.lower():
+            error = SharedAuthError(
+                message=message,
+                error_code=ErrorCode.AUTH_INVALID_TOKEN,
+                context={'error_type': error_type, 'source': 'worker_thread'}
+            )
+        else:
+            error = PacmanSyncError(
+                message=message,
+                error_code=ErrorCode.INTERNAL_UNEXPECTED_ERROR,
+                context={'error_type': error_type, 'source': 'worker_thread'}
+            )
+        
+        # Handle error through error handler
+        self._error_handler.handle_error(
+            error,
+            endpoint_id=self._endpoint_id,
+            auto_recover=True
+        )
         
         self.error_occurred.emit(f"{error_type}: {message}")
     

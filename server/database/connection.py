@@ -55,18 +55,34 @@ class DatabaseManager:
         logger.info(f"Database initialized: {self.database_type}")
     
     async def _init_postgresql(self):
-        """Initialize PostgreSQL connection pool."""
+        """Initialize PostgreSQL connection pool with enhanced configuration."""
         if not self.database_url:
             raise ValueError("DATABASE_URL is required for PostgreSQL")
         
         try:
+            from server.config import get_config
+            config = get_config()
+            
+            # Enhanced pool configuration for horizontal scaling
             self._pool = await asyncpg.create_pool(
                 self.database_url,
-                min_size=1,
-                max_size=10,
-                command_timeout=60
+                min_size=config.database.pool_min_size,
+                max_size=config.database.pool_max_size,
+                command_timeout=60,
+                server_settings={
+                    'application_name': 'pacman-sync-utility',
+                    'tcp_keepalives_idle': '600',
+                    'tcp_keepalives_interval': '30',
+                    'tcp_keepalives_count': '3',
+                },
+                # Connection lifecycle callbacks
+                init=self._init_connection,
+                setup=self._setup_connection,
+                # Pool management settings
+                max_queries=50000,  # Recycle connections after 50k queries
+                max_inactive_connection_lifetime=300,  # 5 minutes
             )
-            logger.info("PostgreSQL connection pool created")
+            logger.info(f"PostgreSQL connection pool created (min={config.database.pool_min_size}, max={config.database.pool_max_size})")
         except Exception as e:
             logger.error(f"Failed to create PostgreSQL pool: {e}")
             raise
@@ -145,11 +161,63 @@ class DatabaseManager:
                 row = await cursor.fetchone()
                 return row[0] if row else None
     
-    async def close(self):
-        """Close database connections."""
+    async def _init_connection(self, conn):
+        """Initialize a new PostgreSQL connection."""
+        # Set connection-level settings for better performance
+        await conn.execute("SET timezone = 'UTC'")
+        await conn.execute("SET statement_timeout = '30s'")
+        await conn.execute("SET lock_timeout = '10s'")
+    
+    async def _setup_connection(self, conn):
+        """Set up a PostgreSQL connection after it's acquired from the pool."""
+        # This is called every time a connection is acquired
+        # Can be used for connection-specific setup
+        pass
+    
+    async def get_pool_stats(self) -> Dict[str, Any]:
+        """Get connection pool statistics for monitoring."""
         if self.database_type == "postgresql" and self._pool:
-            await self._pool.close()
-            logger.info("PostgreSQL connection pool closed")
+            return {
+                "type": "postgresql",
+                "size": self._pool.get_size(),
+                "min_size": self._pool.get_min_size(),
+                "max_size": self._pool.get_max_size(),
+                "idle_connections": self._pool.get_idle_size(),
+                "active_connections": self._pool.get_size() - self._pool.get_idle_size(),
+            }
+        elif self.database_type == "internal":
+            return {
+                "type": "sqlite",
+                "connection_status": "connected" if self._connection else "disconnected"
+            }
+        else:
+            return {"type": "unknown"}
+    
+    async def health_check(self) -> bool:
+        """Perform a health check on the database connection."""
+        try:
+            if self.database_type == "postgresql" and self._pool:
+                async with self._pool.acquire() as conn:
+                    await conn.fetchval("SELECT 1")
+                return True
+            elif self.database_type == "internal" and self._connection:
+                await self._connection.execute("SELECT 1")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Database health check failed: {e}")
+            return False
+    
+    async def close(self):
+        """Close database connections gracefully."""
+        if self.database_type == "postgresql" and self._pool:
+            # Wait for active connections to finish with timeout
+            try:
+                await asyncio.wait_for(self._pool.close(), timeout=10.0)
+                logger.info("PostgreSQL connection pool closed gracefully")
+            except asyncio.TimeoutError:
+                logger.warning("PostgreSQL pool close timed out, forcing termination")
+                self._pool.terminate()
         elif self.database_type == "internal" and self._connection:
             await self._connection.close()
             logger.info("SQLite connection closed")

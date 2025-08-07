@@ -9,10 +9,14 @@ import logging
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, Header, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 from shared.models import Endpoint, Repository, RepositoryPackage, SyncStatus
 from server.core.endpoint_manager import EndpointManager, EndpointAuthenticationError
+from server.middleware.validation import (
+    validate_endpoint_name, validate_hostname, validate_package_name,
+    validate_version, validate_repository_name, validate_url
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -22,6 +26,14 @@ router = APIRouter()
 class EndpointRegistrationRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Endpoint name")
     hostname: str = Field(..., min_length=1, max_length=255, description="Endpoint hostname")
+    
+    @validator('name')
+    def validate_name(cls, v):
+        return validate_endpoint_name(v)
+    
+    @validator('hostname')
+    def validate_hostname_field(cls, v):
+        return validate_hostname(v)
 
 
 class EndpointRegistrationResponse(BaseModel):
@@ -39,12 +51,34 @@ class RepositoryPackageData(BaseModel):
     repository: str
     architecture: str
     description: Optional[str] = None
+    
+    @validator('name')
+    def validate_package_name_field(cls, v):
+        return validate_package_name(v)
+    
+    @validator('version')
+    def validate_version_field(cls, v):
+        return validate_version(v)
+    
+    @validator('repository')
+    def validate_repository_field(cls, v):
+        return validate_repository_name(v)
 
 
 class RepositoryData(BaseModel):
     repo_name: str
     repo_url: Optional[str] = None
     packages: List[RepositoryPackageData]
+    
+    @validator('repo_name')
+    def validate_repo_name(cls, v):
+        return validate_repository_name(v)
+    
+    @validator('repo_url')
+    def validate_repo_url(cls, v):
+        if v is not None:
+            return validate_url(v)
+        return v
 
 
 class RepositorySubmissionRequest(BaseModel):
@@ -72,25 +106,10 @@ async def get_endpoint_manager(request: Request) -> EndpointManager:
     return request.app.state.endpoint_manager
 
 
-# Dependency for endpoint authentication
-async def authenticate_endpoint(
-    authorization: Optional[str] = Header(None),
-    endpoint_manager: EndpointManager = Depends(get_endpoint_manager)
-) -> Endpoint:
-    """Authenticate endpoint using Bearer token."""
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header required")
-    
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header format")
-    
-    token = authorization[7:]  # Remove "Bearer " prefix
-    
-    try:
-        endpoint = await endpoint_manager.authenticate_endpoint(token)
-        return endpoint
-    except EndpointAuthenticationError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+# Get authentication dependency from app state
+def get_authenticate_endpoint(request: Request):
+    """Get endpoint authentication dependency from app state."""
+    return request.app.state.authenticate_endpoint
 
 
 def endpoint_to_response(endpoint: Endpoint) -> EndpointResponse:
@@ -178,11 +197,15 @@ async def get_endpoint(
 @router.put("/endpoints/{endpoint_id}/status")
 async def update_endpoint_status(
     endpoint_id: str,
-    request: EndpointStatusUpdateRequest,
-    current_endpoint: Endpoint = Depends(authenticate_endpoint),
+    status_request: EndpointStatusUpdateRequest,
+    request: Request,
     endpoint_manager: EndpointManager = Depends(get_endpoint_manager)
 ):
     """Update endpoint sync status."""
+    # Authenticate endpoint
+    authenticate_endpoint = get_authenticate_endpoint(request)
+    current_endpoint = await authenticate_endpoint(request)
+    
     # Verify endpoint can only update its own status
     if current_endpoint.id != endpoint_id:
         raise HTTPException(status_code=403, detail="Can only update own endpoint status")
@@ -190,9 +213,9 @@ async def update_endpoint_status(
     try:
         # Validate status
         try:
-            status = SyncStatus(request.status)
+            status = SyncStatus(status_request.status)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid status: {request.status}")
+            raise HTTPException(status_code=400, detail=f"Invalid status: {status_request.status}")
         
         success = await endpoint_manager.update_endpoint_status(endpoint_id, status)
         if not success:
@@ -210,10 +233,14 @@ async def update_endpoint_status(
 @router.delete("/endpoints/{endpoint_id}")
 async def remove_endpoint(
     endpoint_id: str,
-    current_endpoint: Endpoint = Depends(authenticate_endpoint),
+    request: Request,
     endpoint_manager: EndpointManager = Depends(get_endpoint_manager)
 ):
     """Remove an endpoint."""
+    # Authenticate endpoint
+    authenticate_endpoint = get_authenticate_endpoint(request)
+    current_endpoint = await authenticate_endpoint(request)
+    
     # Verify endpoint can only remove itself
     if current_endpoint.id != endpoint_id:
         raise HTTPException(status_code=403, detail="Can only remove own endpoint")
@@ -235,11 +262,15 @@ async def remove_endpoint(
 @router.post("/endpoints/{endpoint_id}/repositories")
 async def submit_repository_info(
     endpoint_id: str,
-    request: RepositorySubmissionRequest,
-    current_endpoint: Endpoint = Depends(authenticate_endpoint),
+    repo_request: RepositorySubmissionRequest,
+    request: Request,
     endpoint_manager: EndpointManager = Depends(get_endpoint_manager)
 ):
     """Submit repository information for an endpoint."""
+    # Authenticate endpoint
+    authenticate_endpoint = get_authenticate_endpoint(request)
+    current_endpoint = await authenticate_endpoint(request)
+    
     # Verify endpoint can only submit its own repository info
     if current_endpoint.id != endpoint_id:
         raise HTTPException(status_code=403, detail="Can only submit own repository information")
@@ -247,7 +278,7 @@ async def submit_repository_info(
     try:
         # Convert request data to Repository objects
         repositories = []
-        for repo_data in request.repositories:
+        for repo_data in repo_request.repositories:
             packages = []
             for pkg_data in repo_data.packages:
                 packages.append(RepositoryPackage(
