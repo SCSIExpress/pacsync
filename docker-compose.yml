@@ -1,0 +1,129 @@
+# Docker Compose configuration for Pacman Sync Utility
+
+services:
+  # Main server service
+  pacman-sync-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: pacman-sync-server
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    environment:
+      # Database configuration
+      DATABASE_TYPE: ${DATABASE_TYPE:-internal}
+      DATABASE_URL: ${DATABASE_URL:-}
+      
+      # Server configuration
+      HTTP_PORT: ${HTTP_PORT:-8080}
+      HTTP_HOST: ${HTTP_HOST:-0.0.0.0}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      
+      # Security configuration
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      API_RATE_LIMIT: ${API_RATE_LIMIT:-100}
+      
+      # Feature flags
+      ENABLE_REPOSITORY_ANALYSIS: ${ENABLE_REPOSITORY_ANALYSIS:-true}
+      AUTO_CLEANUP_OLD_STATES: ${AUTO_CLEANUP_OLD_STATES:-true}
+      
+      # PostgreSQL specific (when using external database)
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-pacman_sync}
+      POSTGRES_USER: ${POSTGRES_USER:-pacman_sync}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      # Persistent data storage
+      - pacman-sync-data:/app/data
+      - pacman-sync-logs:/app/logs
+      - pacman-sync-config:/app/config
+      # Optional: Mount custom configuration
+      - ./config:/app/config:ro
+
+    networks:
+      - pacman-sync-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # PostgreSQL database (optional - only used when DATABASE_TYPE=postgresql)
+  postgres:
+    image: postgres:15-alpine
+    container_name: pacman-sync-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pacman_sync}
+      POSTGRES_USER: ${POSTGRES_USER:-pacman_sync}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d:ro
+    networks:
+      - pacman-sync-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pacman_sync} -d ${POSTGRES_DB:-pacman_sync}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - postgres  # Only start when explicitly requested
+
+  # Development service with hot reload
+  pacman-sync-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: pacman-sync-dev
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    environment:
+      DATABASE_TYPE: ${DATABASE_TYPE:-internal}
+      DATABASE_URL: ${DATABASE_URL:-}
+      HTTP_PORT: ${HTTP_PORT:-8080}
+      HTTP_HOST: ${HTTP_HOST:-0.0.0.0}
+      LOG_LEVEL: ${LOG_LEVEL:-DEBUG}
+      ENVIRONMENT: development
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-key}
+    volumes:
+      # Mount source code for development
+      - ./server:/app/server
+      - ./shared:/app/shared
+      # Persistent data
+      - pacman-sync-dev-data:/app/data
+      - pacman-sync-dev-logs:/app/logs
+      - pacman-sync-dev-config:/app/config
+    networks:
+      - pacman-sync-network
+    profiles:
+      - dev  # Only start in development profile
+
+# Named volumes for persistent data
+volumes:
+  pacman-sync-data:
+    driver: local
+  pacman-sync-logs:
+    driver: local
+  pacman-sync-config:
+    driver: local
+  pacman-sync-dev-data:
+    driver: local
+  pacman-sync-dev-logs:
+    driver: local
+  pacman-sync-dev-config:
+    driver: local
+  postgres-data:
+    driver: local
+
+# Network for service communication
+networks:
+  pacman-sync-network:
+    driver: bridge

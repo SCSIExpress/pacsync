@@ -65,6 +65,9 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
+    from server.config import get_config
+    config = get_config()
+    
     app = FastAPI(
         title="Pacman Sync Utility API",
         description="REST API for managing package synchronization across Arch-based systems",
@@ -75,7 +78,7 @@ def create_app() -> FastAPI:
     # Add CORS middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Configure appropriately for production
+        allow_origins=config.server.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -108,6 +111,27 @@ def create_app() -> FastAPI:
                 }
             }
         )
+    
+    # Health check endpoint
+    @app.get("/health")
+    async def health_check():
+        """Health check endpoint for Docker and monitoring."""
+        try:
+            from server.database.connection import get_database_manager
+            db_manager = get_database_manager()
+            
+            # Test database connection
+            await db_manager.execute("SELECT 1")
+            
+            return {
+                "status": "healthy",
+                "timestamp": "2025-01-15T10:30:00Z",
+                "database": "connected",
+                "version": "1.0.0"
+            }
+        except Exception as e:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=503, detail=f"Database connection failed: {str(e)}")
     
     # Include API routers
     app.include_router(pools_router, prefix="/api", tags=["pools"])
@@ -154,16 +178,14 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    import os
+    from server.config import get_config
     
-    host = os.getenv("HTTP_HOST", "0.0.0.0")
-    port = int(os.getenv("HTTP_PORT", "8080"))
-    log_level = os.getenv("LOG_LEVEL", "info").lower()
+    config = get_config()
     
     uvicorn.run(
         "server.api.main:app",
-        host=host,
-        port=port,
-        log_level=log_level,
-        reload=False
+        host=config.server.host,
+        port=config.server.port,
+        log_level=config.server.log_level.lower(),
+        reload=(config.server.environment == "development")
     )

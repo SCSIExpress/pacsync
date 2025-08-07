@@ -177,9 +177,9 @@ def get_database_manager() -> DatabaseManager:
     """Get the global database manager instance."""
     global _db_manager
     if _db_manager is None:
-        database_type = os.getenv("DATABASE_TYPE", "internal")
-        database_url = os.getenv("DATABASE_URL")
-        _db_manager = DatabaseManager(database_type, database_url)
+        from server.config import get_config
+        config = get_config()
+        _db_manager = DatabaseManager(config.database.type, config.database.url)
     return _db_manager
 
 
