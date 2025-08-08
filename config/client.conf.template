@@ -1,0 +1,189 @@
+# Pacman Sync Utility Client Configuration Template
+# Copy this file to ~/.config/pacman-sync/client.conf or /etc/pacman-sync/client/client.conf
+
+[server]
+# Server URL (required)
+url = http://localhost:8080
+
+# API key for authentication (optional, will be generated on first connection)
+# api_key = your-api-key-here
+
+# Connection timeout in seconds
+timeout = 30
+
+# Retry attempts for failed requests
+retry_attempts = 3
+
+# Retry delay in seconds
+retry_delay = 5
+
+[client]
+# Endpoint name (defaults to hostname if not specified)
+endpoint_name = 
+
+# Pool ID to join (optional, can be assigned via web UI)
+# pool_id = default-pool
+
+# Enable automatic synchronization
+auto_sync = false
+
+# Status update interval in seconds
+update_interval = 300
+
+# Enable offline mode (work without server connection)
+enable_offline_mode = true
+
+[ui]
+# Show desktop notifications
+show_notifications = true
+
+# Minimize to system tray on startup
+minimize_to_tray = true
+
+# Enable system tray integration
+enable_system_tray = true
+
+# System tray icon theme ('auto', 'light', 'dark')
+tray_icon_theme = auto
+
+# Show detailed tooltips
+show_detailed_tooltips = true
+
+# Enable click-to-sync on tray icon
+enable_click_to_sync = false
+
+[operations]
+# Confirm destructive operations
+confirm_destructive_operations = true
+
+# Enable operation progress dialogs
+show_progress_dialogs = true
+
+# Operation timeout in seconds
+operation_timeout = 600
+
+# Enable automatic conflict resolution
+auto_resolve_conflicts = false
+
+# Conflict resolution strategy: 'newest', 'oldest', 'manual'
+conflict_resolution_strategy = manual
+
+[pacman]
+# Pacman executable path
+pacman_path = /usr/bin/pacman
+
+# Enable sudo for pacman operations
+use_sudo = true
+
+# Sudo timeout in seconds
+sudo_timeout = 300
+
+# Additional pacman arguments
+pacman_args = []
+
+# Enable package verification
+verify_packages = true
+
+[logging]
+# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+log_level = INFO
+
+# Log file path (optional, logs to console if not specified)
+# log_file = ~/.local/share/pacman-sync/client.log
+
+# Enable structured logging
+structured_logging = false
+
+# Log format: 'json' or 'text'
+log_format = text
+
+# Maximum log file size in MB
+max_log_size = 10
+
+# Number of log files to keep
+log_backup_count = 5
+
+[waybar]
+# Enable WayBar integration
+enable_waybar = false
+
+# WayBar update interval in seconds
+update_interval = 30
+
+# WayBar output format
+output_format = json
+
+# Show package count in WayBar
+show_package_count = true
+
+# WayBar click actions
+left_click_action = sync
+right_click_action = show_menu
+middle_click_action = set_latest
+scroll_up_action = refresh
+scroll_down_action = show_status
+
+[advanced]
+# Enable debug mode
+debug_mode = false
+
+# Cache directory
+cache_dir = ~/.cache/pacman-sync
+
+# Configuration directory
+config_dir = ~/.config/pacman-sync
+
+# Data directory
+data_dir = ~/.local/share/pacman-sync
+
+# Enable configuration file watching
+watch_config_file = true
+
+# Configuration reload interval in seconds
+config_reload_interval = 60
+
+[security]
+# Enable certificate verification for HTTPS
+verify_ssl = true
+
+# Custom CA certificate path (optional)
+# ca_cert_path = /path/to/ca-cert.pem
+
+# Client certificate for mutual TLS (optional)
+# client_cert_path = /path/to/client-cert.pem
+# client_key_path = /path/to/client-key.pem
+
+# Enable token refresh
+enable_token_refresh = true
+
+# Token refresh threshold in hours
+token_refresh_threshold = 2
+
+[performance]
+# Enable parallel package operations
+enable_parallel_operations = true
+
+# Maximum parallel operations
+max_parallel_operations = 4
+
+# Enable package caching
+enable_package_caching = true
+
+# Package cache size in MB
+package_cache_size = 100
+
+# Enable compression for network requests
+enable_compression = true
+
+[experimental]
+# Enable experimental features
+enable_experimental = false
+
+# Enable AUR package support
+enable_aur_support = false
+
+# Enable delta package downloads
+enable_delta_downloads = false
+
+# Enable package signing verification
+enable_package_signing = false

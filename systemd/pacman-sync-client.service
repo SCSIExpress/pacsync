@@ -1,0 +1,74 @@
+[Unit]
+Description=Pacman Sync Utility Client
+Documentation=file:///opt/pacman-sync/README.md
+Documentation=https://github.com/your-org/pacman-sync-utility
+After=graphical-session.target network-online.target
+Wants=network-online.target
+PartOf=graphical-session.target
+
+[Service]
+Type=exec
+WorkingDirectory=/opt/pacman-sync
+Environment=PATH=/opt/pacman-sync/venv/bin
+Environment=PYTHONPATH=/opt/pacman-sync
+Environment=CONFIG_FILE=%h/.config/pacman-sync/client.conf
+Environment=XDG_RUNTIME_DIR=%t
+Environment=DISPLAY=:0
+
+# Main service command
+ExecStart=/opt/pacman-sync/venv/bin/python -m client.main
+
+# Pre-start checks and setup
+ExecStartPre=/bin/bash -c 'test -d %h/.config/pacman-sync || mkdir -p %h/.config/pacman-sync'
+ExecStartPre=/bin/bash -c 'test -f %h/.config/pacman-sync/client.conf || cp /etc/pacman-sync/client/client.conf %h/.config/pacman-sync/client.conf'
+ExecStartPre=/bin/bash -c 'test -d %h/.local/share/pacman-sync || mkdir -p %h/.local/share/pacman-sync'
+ExecStartPre=/bin/bash -c 'test -d %h/.cache/pacman-sync || mkdir -p %h/.cache/pacman-sync'
+
+# Restart configuration
+Restart=always
+RestartSec=10
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+# Process management
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Security settings (less restrictive for user service)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=false
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RemoveIPC=true
+
+# File system access
+ReadWritePaths=%h/.config/pacman-sync %h/.local/share/pacman-sync %h/.cache/pacman-sync
+ReadOnlyPaths=/etc/pacman-sync
+
+# Network access
+PrivateNetwork=false
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# System calls
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @cpu-emulation @obsolete @reboot @swap @raw-io
+
+# Resource limits
+LimitNOFILE=8192
+LimitNPROC=1024
+LimitCORE=0
+MemoryMax=512M
+TasksMax=1024
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pacman-sync-client
+
+[Install]
+WantedBy=default.target

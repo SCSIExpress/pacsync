@@ -75,3 +75,13 @@ Thumbs.db
 
 # Kiro
 .kiro/
+
+# Project specific
+simple_web/
+*.backup
+*.old
+
+# Development
+.coverage.*
+.mypy_cache/
+.tox/

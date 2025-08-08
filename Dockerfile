@@ -1,18 +1,11 @@
-# Multi-stage build for Pacman Sync Utility Server
-FROM node:18-alpine as web-builder
+# Multi-stage Dockerfile for Pacman Sync Utility Server
+# Based on Ubuntu for familiarity and compatibility
 
-# Build web UI
-WORKDIR /app/web
-COPY server/web/package*.json ./
-RUN npm ci --only=production
+# Base stage with common dependencies
+FROM ubuntu:22.04 as base
 
-COPY server/web/ ./
-RUN npm run build
-
-# Base Python image with common dependencies
-FROM python:3.11-slim as base
-
-# Set environment variables for Python
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PIP_NO_CACHE_DIR=1
@@ -20,123 +13,131 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    postgresql-client \
-    sqlite3 \
+    python3 \
+    python3-pip \
+    python3-venv \
     curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    wget \
+    git \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    libffi-dev \
+    libpq-dev \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create app user for security
-RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /bin/bash appuser
-
-# Set working directory
+# Create application user and directory
+RUN useradd --create-home --shell /bin/bash --uid 1000 pacman-sync
 WORKDIR /app
+RUN chown -R pacman-sync:pacman-sync /app
 
-# Create directories for persistent data with proper permissions
-RUN mkdir -p /app/data /app/logs /app/config \
-    && chown -R appuser:appuser /app
+# Create virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy server requirements
-COPY server-requirements.txt ./requirements.txt
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Upgrade pip and install wheel
+RUN pip install --upgrade pip setuptools wheel
 
 # Development stage
 FROM base as development
 
 # Install development dependencies
-RUN pip install --no-cache-dir \
-    pytest>=7.0.0 \
-    pytest-asyncio>=0.21.0 \
-    pytest-mock>=3.10.0 \
-    black>=23.0.0 \
-    flake8>=6.0.0 \
-    mypy>=1.0.0 \
-    uvicorn[standard]>=0.20.0
-
-# Install additional development tools
 RUN apt-get update && apt-get install -y \
-    git \
     vim \
-    nano \
+    less \
+    htop \
+    strace \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements.txt server-requirements.txt ./
+
+# Install Python dependencies including development tools
+RUN pip install -r requirements.txt -r server-requirements.txt && \
+    pip install pytest pytest-asyncio pytest-mock black flake8 mypy
+
+# Copy source code
+COPY --chown=pacman-sync:pacman-sync . .
+
+# Create necessary directories
+RUN mkdir -p /app/data /app/logs /app/config && \
+    chown -R pacman-sync:pacman-sync /app/data /app/logs /app/config
+
+# Switch to application user
+USER pacman-sync
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8080/health/ready || exit 1
+
+# Development command with hot reload
+CMD ["python3", "-m", "uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+
+# Production build stage
+FROM base as builder
+
+# Copy requirements
+COPY requirements.txt server-requirements.txt ./
+
+# Install production dependencies only
+RUN pip install -r server-requirements.txt
+
+# Copy source code
+COPY . .
+
+# Remove development files and clean up
+RUN find . -type d -name "__pycache__" -exec rm -rf {} + && \
+    find . -type f -name "*.pyc" -delete && \
+    rm -rf .git .pytest_cache tests/ *.md
+
+# Production stage
+FROM ubuntu:22.04 as production
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    curl \
+    libpq5 \
+    sqlite3 \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Copy application code
-COPY server/ ./server/
-COPY shared/ ./shared/
+# Create application user
+RUN useradd --create-home --shell /bin/bash --uid 1000 pacman-sync
 
-# Copy built web UI from web-builder stage
-COPY --from=web-builder /app/web/dist ./server/web/dist
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
 
-# Change ownership to app user
-RUN chown -R appuser:appuser /app
+# Copy application code from builder
+COPY --from=builder --chown=pacman-sync:pacman-sync /app /app
 
-# Switch to app user
-USER appuser
+# Set working directory
+WORKDIR /app
 
-# Expose port
-EXPOSE 8080
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/data /app/logs /app/config && \
+    chown -R pacman-sync:pacman-sync /app
 
-# Health check with enhanced monitoring
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:${HTTP_PORT:-8080}/health/ready || exit 1
-
-# Default environment variables for development
-ENV DATABASE_TYPE=internal
-ENV HTTP_PORT=8080
-ENV HTTP_HOST=0.0.0.0
-ENV LOG_LEVEL=DEBUG
-ENV ENVIRONMENT=development
-
-# Volume mounts for persistent data
-VOLUME ["/app/data", "/app/logs", "/app/config"]
-
-# Development command with auto-reload
-CMD ["python", "-m", "uvicorn", "server.api.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
-
-# Production stage
-FROM base as production
-
-# Production-specific optimizations
-ENV PYTHONOPTIMIZE=1
-ENV ENVIRONMENT=production
-
-# Install production WSGI server
-RUN pip install --no-cache-dir \
-    gunicorn>=20.1.0 \
-    uvicorn[standard]>=0.20.0
-
-# Copy application code
-COPY server/ ./server/
-COPY shared/ ./shared/
-
-# Copy built web UI from web-builder stage
-COPY --from=web-builder /app/web/dist ./server/web/dist
-
-# Change ownership to app user
-RUN chown -R appuser:appuser /app
-
-# Switch to app user
-USER appuser
+# Switch to application user
+USER pacman-sync
 
 # Expose port
 EXPOSE 8080
 
-# Health check with enhanced monitoring
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:${HTTP_PORT:-8080}/health/ready || exit 1
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8080/health/ready || exit 1
 
-# Default environment variables for production
-ENV DATABASE_TYPE=internal
-ENV HTTP_PORT=8080
-ENV HTTP_HOST=0.0.0.0
-ENV LOG_LEVEL=INFO
-ENV ENVIRONMENT=production
-
-# Volume mounts for persistent data
-VOLUME ["/app/data", "/app/logs", "/app/config"]
-
-# Production command with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--access-logfile", "/app/logs/access.log", "--error-logfile", "/app/logs/error.log", "server.api.main:app"]
+# Production command
+CMD ["python3", "-m", "uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "4"]

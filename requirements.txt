@@ -1,10 +1,10 @@
-# Pacman Sync Utility - Python Dependencies
-# 
+# Pacman Sync Utility - Client Dependencies
 # Core Qt GUI framework
 PyQt6>=6.5.0
 
 # HTTP client for API communication  
 aiohttp>=3.8.0
+httpx>=0.25.0
 
 # Configuration file handling
 PyYAML>=6.0
@@ -20,7 +20,7 @@ cryptography>=3.4.0
 # Input validation and sanitization
 bleach>=5.0.0
 
-# Development and testing (optional)
+# Development and testing
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
 pytest-qt>=4.2.0

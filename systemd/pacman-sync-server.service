@@ -1,0 +1,84 @@
+[Unit]
+Description=Pacman Sync Utility Server
+Documentation=file:///opt/pacman-sync/README.md
+Documentation=https://github.com/your-org/pacman-sync-utility
+After=network.target network-online.target
+Wants=network-online.target
+Requires=network.target
+
+[Service]
+Type=exec
+User=pacman-sync
+Group=pacman-sync
+WorkingDirectory=/opt/pacman-sync
+Environment=PATH=/opt/pacman-sync/venv/bin
+Environment=PYTHONPATH=/opt/pacman-sync
+Environment=CONFIG_FILE=/etc/pacman-sync/server.conf
+
+# Main service command
+ExecStart=/opt/pacman-sync/venv/bin/python -m server.main
+
+# Reload configuration on SIGHUP
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Pre-start checks
+ExecStartPre=/bin/bash -c 'test -f /etc/pacman-sync/server.conf || (echo "Configuration file not found: /etc/pacman-sync/server.conf" && exit 1)'
+ExecStartPre=/bin/bash -c 'test -d /var/lib/pacman-sync || mkdir -p /var/lib/pacman-sync'
+ExecStartPre=/bin/bash -c 'test -d /var/log/pacman-sync || mkdir -p /var/log/pacman-sync'
+ExecStartPre=/bin/bash -c 'chown pacman-sync:pacman-sync /var/lib/pacman-sync /var/log/pacman-sync'
+
+# Restart configuration
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=30
+TimeoutReloadSec=10
+
+# Process management
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+PrivateDevices=true
+
+# File system access
+ReadWritePaths=/var/lib/pacman-sync /var/log/pacman-sync
+ReadOnlyPaths=/etc/pacman-sync
+
+# Network access
+PrivateNetwork=false
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# System calls
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @cpu-emulation @obsolete @privileged @reboot @swap @raw-io
+
+# Capabilities
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+LimitCORE=0
+MemoryMax=1G
+TasksMax=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pacman-sync-server
+
+[Install]
+WantedBy=multi-user.target

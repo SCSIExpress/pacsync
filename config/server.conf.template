@@ -1,0 +1,130 @@
+# Pacman Sync Utility Server Configuration Template
+# Copy this file to /etc/pacman-sync/server.conf and customize as needed
+
+[database]
+# Database type: 'internal' for SQLite or 'postgresql' for PostgreSQL
+type = internal
+
+# PostgreSQL configuration (only used when type = postgresql)
+# url = postgresql://username:password@hostname:port/database_name
+# Example: postgresql://pacman_sync:password@localhost:5432/pacman_sync
+
+# Database connection pool settings (PostgreSQL only)
+pool_min_size = 2
+pool_max_size = 10
+pool_timeout = 30
+
+[server]
+# Server bind address and port
+host = 0.0.0.0
+port = 8080
+
+# Environment: 'development' or 'production'
+environment = production
+
+# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+log_level = INFO
+
+# CORS origins for web UI (comma-separated list)
+cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+# Worker processes for production (0 = auto-detect)
+workers = 0
+
+[security]
+# JWT secret key for endpoint authentication (generate with: openssl rand -hex 32)
+jwt_secret_key = CHANGE_THIS_SECRET_KEY
+
+# JWT token expiration time in hours
+jwt_expiration_hours = 24
+
+# Enable API rate limiting
+enable_rate_limiting = true
+
+# Default API rate limit (requests per minute)
+api_rate_limit = 100
+
+# Admin API tokens (optional, for administrative operations)
+admin_tokens = []
+
+# Enable HTTPS redirect (when behind reverse proxy)
+force_https = false
+
+[features]
+# Enable automatic repository analysis
+enable_repository_analysis = true
+
+# Automatically clean up old package states
+auto_cleanup_old_states = true
+
+# Maximum age for old states in days
+max_state_age_days = 30
+
+# Enable operation audit logging
+enable_audit_logging = true
+
+# Enable performance monitoring
+enable_performance_monitoring = false
+
+[paths]
+# Data directory for internal database and persistent storage
+data_dir = /var/lib/pacman-sync
+
+# Log directory
+log_dir = /var/log/pacman-sync
+
+# Configuration directory
+config_dir = /etc/pacman-sync
+
+[monitoring]
+# Health check configuration
+health_check_interval = 30
+health_check_timeout = 10
+
+# Enable structured logging
+structured_logging = true
+
+# Log format: 'json' or 'text'
+log_format = json
+
+# Enable request/response logging
+enable_request_logging = false
+
+[performance]
+# Database query timeout in seconds
+db_query_timeout = 30
+
+# Maximum concurrent operations per endpoint
+max_concurrent_operations = 3
+
+# Operation timeout in seconds
+operation_timeout = 300
+
+# Enable database connection pooling
+enable_connection_pooling = true
+
+[notifications]
+# Enable webhook notifications for sync events
+enable_webhooks = false
+
+# Webhook URLs (comma-separated)
+webhook_urls = []
+
+# Webhook timeout in seconds
+webhook_timeout = 10
+
+# Retry failed webhooks
+webhook_retry_attempts = 3
+
+[backup]
+# Enable automatic database backups
+enable_backups = false
+
+# Backup directory
+backup_dir = /var/backups/pacman-sync
+
+# Backup retention in days
+backup_retention_days = 7
+
+# Backup schedule (cron format)
+backup_schedule = "0 2 * * *"

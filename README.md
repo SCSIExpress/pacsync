@@ -34,50 +34,109 @@ The system consists of three main components:
 
 ## Quick Start
 
-### Server Setup
+### Automated Installation
 
-1. Install dependencies:
+The easiest way to install and configure the Pacman Sync Utility is using the setup script:
+
 ```bash
-pip install -r requirements.txt
+# Full installation with both server and client
+sudo python3 setup.py install --server --client --systemd
+
+# Configure with default settings
+python3 setup.py configure --server --client
+
+# Start services
+python3 setup.py start --services server client
+
+# Check status
+python3 setup.py status
 ```
 
-2. Configure database (PostgreSQL recommended for production):
+### Manual Installation
+
+#### Server Setup
+
+1. Install using the installation script:
 ```bash
-export DATABASE_URL="postgresql://user:pass@localhost/pacman_sync"
+sudo ./install.sh --server --systemd
 ```
 
-3. Run database migrations:
+2. Configure the server:
 ```bash
-python -m server.database.migrations
+sudo cp config/server.conf.template /etc/pacman-sync/server.conf
+sudo nano /etc/pacman-sync/server.conf  # Customize settings
 ```
 
-4. Start the server:
+3. Start the server:
 ```bash
-python -m server.main
+sudo systemctl enable --now pacman-sync-server
 ```
 
-### Client Setup
+4. Verify server is running:
+```bash
+curl http://localhost:8080/health/live
+```
+
+#### Client Setup
 
 1. Install the client:
 ```bash
-python -m client.main --install
+sudo ./install.sh --client --systemd
 ```
 
-2. Configure server connection:
+2. Configure the client:
 ```bash
-python -m client.main --configure
+cp config/client.conf.template ~/.config/pacman-sync/client.conf
+nano ~/.config/pacman-sync/client.conf  # Set server URL and endpoint name
 ```
 
-3. Register endpoint with server:
+3. Start the client:
 ```bash
-python -m client.main --register
+systemctl --user enable --now pacman-sync-client
 ```
+
+4. Check system tray for the sync status icon
 
 ### Docker Deployment
 
+#### Production Deployment
+
 ```bash
+# Build and start with Docker Compose
+./deploy.sh prod --database postgresql --port 8080
+
+# Or manually with Docker
 docker build -t pacman-sync-server .
-docker run -d -p 8000:8000 -e DATABASE_URL="..." pacman-sync-server
+docker run -d -p 8080:8080 \
+  -e DATABASE_TYPE=postgresql \
+  -e DATABASE_URL="postgresql://user:pass@host:5432/db" \
+  -e JWT_SECRET_KEY="$(openssl rand -hex 32)" \
+  pacman-sync-server
+```
+
+#### Development Environment
+
+```bash
+# Start development environment
+./deploy.sh dev
+
+# Or with Docker Compose
+docker-compose --profile dev up -d
+```
+
+### Validation and Integration
+
+After installation, validate the deployment:
+
+```bash
+# Validate all components
+python3 scripts/validate-deployment.py --components all
+
+# Integrate components
+python3 scripts/integrate-components.py --components all
+
+# Run comprehensive setup validation
+python3 setup.py validate
 ```
 
 ## Usage
@@ -158,12 +217,33 @@ pytest tests/
 
 ## License
 
-[Add your license here]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Documentation
+
+For detailed information, see the documentation in the `docs/` directory:
+
+- **[Documentation Index](docs/README.md)** - Complete documentation overview
+- **[Desktop Client Guide](docs/desktop-client-guide.md)** - Qt desktop client usage
+- **[Web UI Guide](docs/web-ui-guide.md)** - Web interface management  
+- **[Architecture Overview](docs/architecture.md)** - System design and components
+- **[API Documentation](docs/api-documentation.md)** - REST API reference
+- **[Development Setup](docs/development-setup.md)** - Development environment
+- **[Docker Deployment](DOCKER.md)** - Container deployment guide
+- **[Configuration Guide](docs/configuration.md)** - Configuration options
+- **[Troubleshooting Guide](docs/troubleshooting.md)** - Common issues and solutions
+
+### Quick Reference
+
+- **End Users**: Start with [Documentation Index](docs/README.md)
+- **Developers**: Begin with [Development Setup](docs/development-setup.md)
+- **Deployment**: See [Docker Guide](DOCKER.md) or [Installation Guide](docs/installation.md)
 
 ## Support
 
 For issues and questions:
-- Check the documentation in `docs/`
+- Check the [Documentation Index](docs/README.md)
+- Review the [Troubleshooting Guide](docs/troubleshooting.md)
 - Review existing issues on GitHub
 - Create a new issue with detailed information
 

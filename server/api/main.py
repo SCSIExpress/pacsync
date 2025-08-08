@@ -8,6 +8,7 @@ middleware, error handling, and configuration.
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -21,6 +22,7 @@ from server.core.sync_coordinator import SyncCoordinator
 from server.middleware.auth import create_auth_dependencies, add_security_headers
 from server.middleware.rate_limiting import create_rate_limit_middleware
 from server.middleware.validation import validation_middleware
+from server.middleware.operation_tracking import create_operation_tracking_middleware
 from server.api.pools import router as pools_router
 from server.api.endpoints import router as endpoints_router
 from server.api.sync import router as sync_router
@@ -114,6 +116,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     
+    # Add operation tracking middleware
+    operation_tracking_middleware = create_operation_tracking_middleware(
+        enable_performance_logging=config.server.environment != "production"
+    )
+    app.add_middleware(operation_tracking_middleware)
+    
     # Add rate limiting middleware
     if config.security.enable_rate_limiting:
         rate_limit_middleware = create_rate_limit_middleware(
@@ -149,20 +157,53 @@ def create_app() -> FastAPI:
     @app.exception_handler(PacmanSyncError)
     async def pacman_sync_error_handler(request: Request, exc: PacmanSyncError):
         """Handle structured PacmanSyncError exceptions."""
-        # Log the structured error
-        log_structured_error(logger, exc)
+        # Extract endpoint ID from request if available
+        endpoint_id = None
+        if hasattr(request.state, 'current_endpoint'):
+            endpoint_id = request.state.current_endpoint.id
         
-        # Audit log the error
-        audit_logger.log_error(exc)
+        # Extract operation ID from request context if available
+        operation_id = getattr(request.state, 'operation_id', None)
+        
+        # Log the structured error with context
+        log_structured_error(logger, exc, endpoint_id, operation_id)
+        
+        # Audit log the error with full context
+        audit_logger.log_error(exc, endpoint_id, operation_id)
+        
+        # Create enhanced error response with recovery suggestions
+        error_response = create_error_response(exc)
+        
+        # Add request context to error response
+        error_response['error']['request_context'] = {
+            'method': request.method,
+            'path': str(request.url.path),
+            'endpoint_id': endpoint_id,
+            'operation_id': operation_id,
+            'client_host': request.client.host if request.client else None,
+            'user_agent': request.headers.get('user-agent')
+        }
         
         return JSONResponse(
             status_code=exc.get_http_status_code(),
-            content=create_error_response(exc)
+            content=error_response,
+            headers={
+                'X-Error-Code': exc.error_code.value,
+                'X-Error-Severity': exc.severity.value,
+                'X-Request-ID': operation_id or f"req_{datetime.now().timestamp()}"
+            }
         )
     
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
         """Handle FastAPI HTTP exceptions with structured error format."""
+        # Extract context information
+        endpoint_id = None
+        if hasattr(request.state, 'current_endpoint'):
+            endpoint_id = request.state.current_endpoint.id
+        
+        operation_id = getattr(request.state, 'operation_id', None)
+        
         # Convert to structured error
         structured_error = handle_exception(
             exc,
@@ -170,21 +211,48 @@ def create_app() -> FastAPI:
                 'request_method': request.method,
                 'request_path': str(request.url.path),
                 'status_code': exc.status_code,
-                'client_host': request.client.host if request.client else None
+                'client_host': request.client.host if request.client else None,
+                'endpoint_id': endpoint_id,
+                'operation_id': operation_id,
+                'user_agent': request.headers.get('user-agent')
             }
         )
         
-        # Log the error
-        log_structured_error(logger, structured_error)
+        # Log the error with context
+        log_structured_error(logger, structured_error, endpoint_id, operation_id)
+        
+        # Audit log for authentication/authorization errors
+        if exc.status_code in [401, 403]:
+            audit_logger.log_error(structured_error, endpoint_id, operation_id)
+        
+        # Create enhanced error response
+        error_response = create_error_response(structured_error)
+        error_response['error']['request_context'] = {
+            'method': request.method,
+            'path': str(request.url.path),
+            'endpoint_id': endpoint_id,
+            'operation_id': operation_id
+        }
         
         return JSONResponse(
             status_code=exc.status_code,
-            content=create_error_response(structured_error)
+            content=error_response,
+            headers={
+                'X-Error-Code': structured_error.error_code.value,
+                'X-Request-ID': operation_id or f"req_{datetime.now().timestamp()}"
+            }
         )
     
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
         """Handle unexpected exceptions with structured error format."""
+        # Extract context information
+        endpoint_id = None
+        if hasattr(request.state, 'current_endpoint'):
+            endpoint_id = request.state.current_endpoint.id
+        
+        operation_id = getattr(request.state, 'operation_id', None)
+        
         # Convert to structured error
         structured_error = handle_exception(
             exc,
@@ -192,22 +260,53 @@ def create_app() -> FastAPI:
                 'request_method': request.method,
                 'request_path': str(request.url.path),
                 'client_host': request.client.host if request.client else None,
-                'handler': 'general_exception_handler'
+                'endpoint_id': endpoint_id,
+                'operation_id': operation_id,
+                'handler': 'general_exception_handler',
+                'user_agent': request.headers.get('user-agent'),
+                'exception_type': type(exc).__name__
             },
             default_error_code=ErrorCode.INTERNAL_UNEXPECTED_ERROR
         )
         
-        # Log the error with full traceback
-        logger.error(f"Unhandled exception: {exc}", exc_info=True)
-        log_structured_error(logger, structured_error)
+        # Log the error with full traceback and context
+        logger.error(
+            f"Unhandled exception: {exc}",
+            exc_info=True,
+            extra={
+                'endpoint_id': endpoint_id,
+                'operation_id': operation_id,
+                'request_method': request.method,
+                'request_path': str(request.url.path)
+            }
+        )
+        log_structured_error(logger, structured_error, endpoint_id, operation_id)
         
-        # Audit log critical errors
-        if structured_error.severity.value in ['high', 'critical']:
-            audit_logger.log_error(structured_error)
+        # Always audit log unexpected errors
+        audit_logger.log_error(structured_error, endpoint_id, operation_id)
+        
+        # Create enhanced error response
+        error_response = create_error_response(structured_error)
+        error_response['error']['request_context'] = {
+            'method': request.method,
+            'path': str(request.url.path),
+            'endpoint_id': endpoint_id,
+            'operation_id': operation_id
+        }
+        
+        # Don't expose internal details in production
+        if config.server.environment == "production":
+            error_response['error']['context'] = {}
+            error_response['error']['message'] = "An internal server error occurred"
         
         return JSONResponse(
             status_code=structured_error.get_http_status_code(),
-            content=create_error_response(structured_error)
+            content=error_response,
+            headers={
+                'X-Error-Code': structured_error.error_code.value,
+                'X-Error-Severity': structured_error.severity.value,
+                'X-Request-ID': operation_id or f"req_{datetime.now().timestamp()}"
+            }
         )
     
     # Include API routers

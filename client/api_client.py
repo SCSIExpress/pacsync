@@ -201,6 +201,9 @@ class PacmanSyncAPIClient(IAPIClient):
                         # Authentication error - try to refresh token
                         error_data = await self._get_error_response(response)
                         
+                        # Extract structured error information if available
+                        error_info = self._extract_structured_error(error_data)
+                        
                         # Attempt token refresh if we have a token manager
                         if self.token_manager.is_authenticated() and attempt == 0:
                             logger.info("Attempting token refresh due to 401 error")
@@ -211,23 +214,65 @@ class PacmanSyncAPIClient(IAPIClient):
                         
                         # Clear authentication state and raise error
                         self.token_manager.logout()
-                        raise AuthenticationError(f"Authentication failed: {error_data.get('detail', 'Unauthorized')}")
+                        
+                        # Create structured authentication error
+                        from shared.exceptions import AuthenticationError as StructuredAuthError, ErrorCode
+                        raise StructuredAuthError(
+                            message=error_info.get('message', 'Authentication failed'),
+                            error_code=ErrorCode.AUTH_INVALID_TOKEN,
+                            context=error_info.get('context', {}),
+                            user_message=error_info.get('user_message', 'Please check your credentials and try again')
+                        )
                     
                     elif response.status == 403:
                         error_data = await self._get_error_response(response)
-                        raise APIClientError(f"Forbidden: {error_data.get('detail', 'Access denied')}")
+                        error_info = self._extract_structured_error(error_data)
+                        
+                        from shared.exceptions import AuthenticationError as StructuredAuthError, ErrorCode
+                        raise StructuredAuthError(
+                            message=error_info.get('message', 'Access forbidden'),
+                            error_code=ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+                            context=error_info.get('context', {}),
+                            user_message=error_info.get('user_message', 'You do not have permission to perform this action')
+                        )
                     
                     elif response.status == 404:
                         error_data = await self._get_error_response(response)
-                        raise APIClientError(f"Not found: {error_data.get('detail', 'Resource not found')}")
+                        error_info = self._extract_structured_error(error_data)
+                        
+                        from shared.exceptions import ValidationError as StructuredValidationError, ErrorCode
+                        raise StructuredValidationError(
+                            message=error_info.get('message', 'Resource not found'),
+                            error_code=ErrorCode.SYNC_POOL_NOT_FOUND,
+                            context=error_info.get('context', {}),
+                            user_message=error_info.get('user_message', 'The requested resource was not found')
+                        )
                     
                     elif response.status >= 500:
                         error_data = await self._get_error_response(response)
-                        raise ServerError(f"Server error ({response.status}): {error_data.get('detail', 'Internal server error')}")
+                        error_info = self._extract_structured_error(error_data)
+                        
+                        from shared.exceptions import PacmanSyncError, ErrorCode, ErrorSeverity
+                        raise PacmanSyncError(
+                            message=error_info.get('message', f'Server error ({response.status})'),
+                            error_code=ErrorCode.INTERNAL_SERVICE_UNAVAILABLE,
+                            severity=ErrorSeverity.HIGH,
+                            context=error_info.get('context', {'status_code': response.status}),
+                            user_message=error_info.get('user_message', 'The server is currently unavailable. Please try again later.')
+                        )
                     
                     else:
                         error_data = await self._get_error_response(response)
-                        raise APIClientError(f"Request failed ({response.status}): {error_data.get('detail', 'Unknown error')}")
+                        error_info = self._extract_structured_error(error_data)
+                        
+                        from shared.exceptions import PacmanSyncError, ErrorCode, ErrorSeverity
+                        raise PacmanSyncError(
+                            message=error_info.get('message', f'Request failed ({response.status})'),
+                            error_code=ErrorCode.INTERNAL_UNEXPECTED_ERROR,
+                            severity=ErrorSeverity.MEDIUM,
+                            context=error_info.get('context', {'status_code': response.status}),
+                            user_message=error_info.get('user_message', 'An unexpected error occurred. Please try again.')
+                        )
             
             except (ClientError, asyncio.TimeoutError, OSError) as e:
                 last_exception = e
@@ -258,11 +303,41 @@ class PacmanSyncAPIClient(IAPIClient):
                 logger.error(f"Unexpected error in request: {e}")
                 raise APIClientError(f"Request failed: {str(e)}")
         
-        # All retries exhausted
+        # All retries exhausted - create structured network error
         if last_exception:
-            raise NetworkError(f"Network request failed after {self.retry_config.max_retries + 1} attempts: {last_exception}")
+            from shared.exceptions import NetworkError as StructuredNetworkError, ErrorCode, ErrorSeverity, RecoveryAction
+            
+            # Determine specific error code based on exception type
+            if isinstance(last_exception, asyncio.TimeoutError):
+                error_code = ErrorCode.NETWORK_TIMEOUT
+            elif isinstance(last_exception, (ConnectionError, OSError)):
+                error_code = ErrorCode.NETWORK_CONNECTION_FAILED
+            else:
+                error_code = ErrorCode.NETWORK_CONNECTION_FAILED
+            
+            raise StructuredNetworkError(
+                message=f"Network request failed after {self.retry_config.max_retries + 1} attempts: {last_exception}",
+                error_code=error_code,
+                context={
+                    'url': url,
+                    'method': method,
+                    'attempts': self.retry_config.max_retries + 1,
+                    'last_exception_type': type(last_exception).__name__,
+                    'last_exception_message': str(last_exception)
+                },
+                recovery_actions=[RecoveryAction.RETRY_WITH_BACKOFF, RecoveryAction.RECONNECT],
+                user_message="Unable to connect to the server. Please check your network connection and try again.",
+                cause=last_exception
+            )
         else:
-            raise APIClientError("Request failed for unknown reason")
+            from shared.exceptions import PacmanSyncError, ErrorCode, ErrorSeverity
+            raise PacmanSyncError(
+                message="Request failed for unknown reason",
+                error_code=ErrorCode.INTERNAL_UNEXPECTED_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                context={'url': url, 'method': method},
+                user_message="An unexpected error occurred. Please try again."
+            )
     
     async def _get_error_response(self, response) -> Dict[str, Any]:
         """Extract error information from response."""
@@ -270,6 +345,33 @@ class PacmanSyncAPIClient(IAPIClient):
             return await response.json()
         except:
             return {"detail": await response.text() or "Unknown error"}
+    
+    def _extract_structured_error(self, error_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract structured error information from API response."""
+        # Check if it's already a structured error response
+        if 'error' in error_data:
+            error_info = error_data['error']
+            return {
+                'message': error_info.get('message', 'Unknown error'),
+                'user_message': error_info.get('user_message', error_info.get('message', 'An error occurred')),
+                'context': error_info.get('context', {}),
+                'error_code': error_info.get('code'),
+                'severity': error_info.get('severity'),
+                'recovery_actions': error_info.get('recovery_actions', []),
+                'request_context': error_info.get('request_context', {})
+            }
+        else:
+            # Legacy error format
+            detail = error_data.get('detail', 'Unknown error')
+            return {
+                'message': detail,
+                'user_message': detail,
+                'context': {},
+                'error_code': None,
+                'severity': 'medium',
+                'recovery_actions': [],
+                'request_context': {}
+            }
     
     def is_offline(self) -> bool:
         """Check if client is currently offline."""
