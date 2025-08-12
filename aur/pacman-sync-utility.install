@@ -1,0 +1,120 @@
+post_install() {
+    echo "Setting up Pacman Sync Utility..."
+    
+    # Create system user and group using systemd-sysusers
+    systemd-sysusers /usr/lib/sysusers.d/pacman-sync-utility.conf
+    
+    # Create necessary directories using systemd-tmpfiles
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/pacman-sync-utility.conf
+    
+    # Generate JWT secret key if it doesn't exist
+    if [ ! -f /etc/pacman-sync-utility/jwt-secret ]; then
+        echo "Generating JWT secret key..."
+        openssl rand -hex 32 > /etc/pacman-sync-utility/jwt-secret
+        chmod 600 /etc/pacman-sync-utility/jwt-secret
+        chown pacman-sync:pacman-sync /etc/pacman-sync-utility/jwt-secret
+    fi
+    
+    # Initialize database
+    echo "Initializing database..."
+    sudo -u pacman-sync /usr/bin/pacman-sync-server --init-db 2>/dev/null || echo "Database initialization skipped (may already exist)"
+    
+    # Reload systemd daemon
+    systemctl daemon-reload
+    
+    # Update desktop database
+    update-desktop-database -q
+    
+    # Update icon cache
+    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+    
+    echo ""
+    echo "Pacman Sync Utility has been installed successfully!"
+    echo ""
+    echo "To start the server:"
+    echo "  sudo systemctl enable --now pacman-sync-server"
+    echo ""
+    echo "To start the client for your user:"
+    echo "  systemctl --user enable --now pacman-sync-client"
+    echo ""
+    echo "Configuration files are located in /etc/pacman-sync-utility/"
+    echo "Server logs will be written to /var/log/pacman-sync-utility/"
+    echo ""
+}
+
+post_upgrade() {
+    echo "Upgrading Pacman Sync Utility..."
+    
+    # Ensure system user exists (in case upgrading from older version)
+    systemd-sysusers /usr/lib/sysusers.d/pacman-sync-utility.conf
+    
+    # Update directories and permissions
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/pacman-sync-utility.conf
+    
+    # Run database migrations
+    echo "Running database migrations..."
+    sudo -u pacman-sync /usr/bin/pacman-sync-server --migrate-db 2>/dev/null || echo "Database migration completed or not needed"
+    
+    # Reload systemd daemon
+    systemctl daemon-reload
+    
+    # Update desktop database
+    update-desktop-database -q
+    
+    # Update icon cache
+    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+    
+    # Restart services if they are running
+    if systemctl is-active --quiet pacman-sync-server; then
+        echo "Restarting server service..."
+        systemctl restart pacman-sync-server
+    fi
+    
+    # Note: User services need to be restarted manually by each user
+    echo ""
+    echo "Pacman Sync Utility has been upgraded successfully!"
+    echo ""
+    echo "If you have the client service running, restart it with:"
+    echo "  systemctl --user restart pacman-sync-client"
+    echo ""
+}
+
+pre_remove() {
+    echo "Preparing to remove Pacman Sync Utility..."
+    
+    # Stop and disable server service
+    if systemctl is-active --quiet pacman-sync-server; then
+        echo "Stopping server service..."
+        systemctl stop pacman-sync-server
+    fi
+    
+    if systemctl is-enabled --quiet pacman-sync-server; then
+        echo "Disabling server service..."
+        systemctl disable pacman-sync-server
+    fi
+    
+    # Note about user services
+    echo ""
+    echo "Please manually stop and disable the client service if running:"
+    echo "  systemctl --user stop pacman-sync-client"
+    echo "  systemctl --user disable pacman-sync-client"
+    echo ""
+}
+
+post_remove() {
+    # Update desktop database
+    update-desktop-database -q
+    
+    # Update icon cache
+    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+    
+    echo ""
+    echo "Pacman Sync Utility has been removed."
+    echo ""
+    echo "Configuration files have been preserved in /etc/pacman-sync-utility/"
+    echo "Database and logs have been preserved in /var/lib/pacman-sync-utility/ and /var/log/pacman-sync-utility/"
+    echo "To completely remove all data, run:"
+    echo "  sudo rm -rf /etc/pacman-sync-utility /var/lib/pacman-sync-utility /var/log/pacman-sync-utility"
+    echo "  sudo userdel pacman-sync"
+    echo ""
+}

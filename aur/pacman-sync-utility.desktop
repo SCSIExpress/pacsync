@@ -1,0 +1,24 @@
+[Desktop Entry]
+Name=Pacman Sync Utility
+GenericName=Package Synchronization Manager
+Comment=Centralized package synchronization utility for Arch Linux
+Exec=/usr/bin/pacman-sync-client
+Icon=pacman-sync-utility
+Terminal=false
+Type=Application
+Categories=System;PackageManager;Settings;
+Keywords=pacman;sync;package;manager;arch;linux;synchronization;
+StartupNotify=true
+StartupWMClass=pacman-sync-utility
+MimeType=
+Actions=
+
+[Desktop Action preferences]
+Name=Preferences
+Exec=/usr/bin/pacman-sync-client --preferences
+Icon=preferences-system
+
+[Desktop Action status]
+Name=Show Status
+Exec=/usr/bin/pacman-sync-client --status
+Icon=dialog-information

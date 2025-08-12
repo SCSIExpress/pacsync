@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1793d1;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0f5582;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="boxGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:0.9" />
+      <stop offset="100%" style="stop-color:#e0e0e0;stop-opacity:0.9" />
+    </linearGradient>
+    <linearGradient id="arrowGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4caf50;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2e7d32;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="128" cy="128" r="120" fill="url(#bgGradient)" stroke="#0a4a6b" stroke-width="4"/>
+  
+  <!-- Package boxes representing sync -->
+  <g transform="translate(64, 80)">
+    <!-- Left package box -->
+    <rect x="0" y="0" width="40" height="40" rx="4" fill="url(#boxGradient)" stroke="#999" stroke-width="1.5"/>
+    <rect x="4" y="4" width="32" height="8" fill="#1793d1" opacity="0.7"/>
+    <rect x="4" y="16" width="32" height="8" fill="#1793d1" opacity="0.5"/>
+    <rect x="4" y="28" width="32" height="8" fill="#1793d1" opacity="0.3"/>
+    
+    <!-- Right package box -->
+    <rect x="88" y="0" width="40" height="40" rx="4" fill="url(#boxGradient)" stroke="#999" stroke-width="1.5"/>
+    <rect x="92" y="4" width="32" height="8" fill="#1793d1" opacity="0.7"/>
+    <rect x="92" y="16" width="32" height="8" fill="#1793d1" opacity="0.5"/>
+    <rect x="92" y="28" width="32" height="8" fill="#1793d1" opacity="0.3"/>
+    
+    <!-- Sync arrows -->
+    <g transform="translate(48, 12)">
+      <!-- Right arrow -->
+      <path d="M0,8 L24,8 L20,4 M24,8 L20,12" stroke="url(#arrowGradient)" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <!-- Left arrow -->
+      <path d="M32,24 L8,24 L12,20 M8,24 L12,28" stroke="url(#arrowGradient)" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+  </g>
+  
+  <!-- Central sync symbol -->
+  <g transform="translate(128, 160)">
+    <circle cx="0" cy="0" r="16" fill="url(#arrowGradient)" stroke="#2e7d32" stroke-width="2"/>
+    <path d="M-8,-4 L0,4 L8,-4" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M-8,4 L0,-4 L8,4" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  
+  <!-- Arch Linux inspired accent -->
+  <g transform="translate(128, 200)">
+    <path d="M-20,8 L0,-8 L20,8 L16,8 L0,0 L-16,8 Z" fill="#ffffff" opacity="0.8"/>
+  </g>
+</svg>

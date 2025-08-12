@@ -7,7 +7,7 @@ with appropriate defaults and validation.
 
 import os
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict
 from dataclasses import dataclass
 
 

@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>pacman-sync-dev</Name>
+  <Repository>ghcr.io/scsiexpress/pacman-sync-server:dev-main-24b2163</Repository>
+  <Registry>https://hub.docker.com/</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/SCSIExpress/pacsync</Support>
+  <Project>https://github.com/SCSIExpress/pacsync</Project>
+  <Overview>Pacman Sync Utility Development Container - A tool for synchronizing Arch Linux package states with hot reload for development.</Overview>
+  <Category>Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8080]</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/your-repo/pacman-sync-utility/main/docs/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="HTTP Port" Target="8080" Default="8080" Mode="tcp" Description="HTTP port for the web interface" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="Database Type" Target="DATABASE_TYPE" Default="internal" Mode="" Description="Database type (internal or postgresql)" Type="Variable" Display="always" Required="false" Mask="false">internal</Config>
+  <Config Name="Database URL" Target="DATABASE_URL" Default="" Mode="" Description="Database connection URL (leave empty for internal database)" Type="Variable" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="HTTP Host" Target="HTTP_HOST" Default="0.0.0.0" Mode="" Description="HTTP host binding" Type="Variable" Display="advanced" Required="false" Mask="false">0.0.0.0</Config>
+  <Config Name="Log Level" Target="LOG_LEVEL" Default="DEBUG" Mode="" Description="Logging level (DEBUG, INFO, WARNING, ERROR)" Type="Variable" Display="always" Required="false" Mask="false">DEBUG</Config>
+  <Config Name="Environment" Target="ENVIRONMENT" Default="development" Mode="" Description="Application environment" Type="Variable" Display="advanced" Required="false" Mask="false">development</Config>
+  <Config Name="JWT Secret Key" Target="JWT_SECRET_KEY" Default="dev-secret-key" Mode="" Description="JWT secret key for authentication" Type="Variable" Display="always" Required="false" Mask="true">dev-secret-key</Config>
+  <Config Name="Data Volume" Target="/app/data" Default="/mnt/user/appdata/pacman-sync-dev/data" Mode="rw" Description="Application data storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/pacman-sync-dev/data</Config>
+  <Config Name="Logs Volume" Target="/app/logs" Default="/mnt/user/appdata/pacman-sync-dev/logs" Mode="rw" Description="Application logs storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/pacman-sync-dev/logs</Config>
+  <Config Name="Config Volume" Target="/app/config" Default="/mnt/user/appdata/pacman-sync-dev/config" Mode="rw" Description="Application configuration storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/pacman-sync-dev/config</Config>
+  <Config Name="Server Source Code" Target="/app/server" Default="/mnt/user/appdata/pacman-sync-dev/server" Mode="rw" Description="Server source code for development (hot reload)" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/pacman-sync-dev/server</Config>
+  <Config Name="Shared Source Code" Target="/app/shared" Default="/mnt/user/appdata/pacman-sync-dev/shared" Mode="rw" Description="Shared source code for development (hot reload)" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/pacman-sync-dev/shared</Config>
+</Container>

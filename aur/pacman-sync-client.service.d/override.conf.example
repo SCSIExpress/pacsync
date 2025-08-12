@@ -1,0 +1,24 @@
+# Example override configuration for pacman-sync-client.service
+# Copy this file to ~/.config/systemd/user/pacman-sync-client.service.d/override.conf
+# and modify as needed
+
+[Unit]
+# Add additional dependencies if needed
+# After=some-other-service.service
+
+[Service]
+# Override environment variables
+# Environment=PACMAN_SYNC_SERVER_URL=https://my-server.example.com:8000
+# Environment=PACMAN_SYNC_LOG_LEVEL=DEBUG
+
+# Adjust resource limits
+# MemoryMax=1G
+# TasksMax=200
+
+# Modify restart behavior
+# RestartSec=10
+# Restart=on-failure
+
+[Install]
+# Change installation target if needed
+# WantedBy=graphical-session.target

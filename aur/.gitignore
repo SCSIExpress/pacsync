@@ -1,0 +1,21 @@
+# Build artifacts
+*.pkg.tar.xz
+*.pkg.tar.zst
+*.pkg.tar.gz
+
+# Build directories
+pkg/
+src/
+
+# Temporary files
+*.tmp
+*.log
+
+# Editor files
+*~
+.*.swp
+.*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

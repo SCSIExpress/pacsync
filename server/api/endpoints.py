@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, Header, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, validator
 
 from shared.models import Endpoint, Repository, RepositoryPackage, SyncStatus
@@ -20,6 +21,9 @@ from server.middleware.validation import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# HTTP Bearer token scheme
+security = HTTPBearer(auto_error=False)
 
 
 # Request/Response Models
@@ -107,9 +111,13 @@ async def get_endpoint_manager(request: Request) -> EndpointManager:
 
 
 # Get authentication dependency from app state
-def get_authenticate_endpoint(request: Request):
+async def get_authenticate_endpoint(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+) -> Endpoint:
     """Get endpoint authentication dependency from app state."""
-    return request.app.state.authenticate_endpoint
+    auth_func = request.app.state.authenticate_endpoint
+    return await auth_func(request, credentials)
 
 
 def endpoint_to_response(endpoint: Endpoint) -> EndpointResponse:
@@ -199,12 +207,10 @@ async def update_endpoint_status(
     endpoint_id: str,
     status_request: EndpointStatusUpdateRequest,
     request: Request,
-    endpoint_manager: EndpointManager = Depends(get_endpoint_manager)
+    endpoint_manager: EndpointManager = Depends(get_endpoint_manager),
+    current_endpoint: Endpoint = Depends(get_authenticate_endpoint)
 ):
     """Update endpoint sync status."""
-    # Authenticate endpoint
-    authenticate_endpoint = get_authenticate_endpoint(request)
-    current_endpoint = await authenticate_endpoint(request)
     
     # Verify endpoint can only update its own status
     if current_endpoint.id != endpoint_id:
@@ -234,12 +240,10 @@ async def update_endpoint_status(
 async def remove_endpoint(
     endpoint_id: str,
     request: Request,
-    endpoint_manager: EndpointManager = Depends(get_endpoint_manager)
+    endpoint_manager: EndpointManager = Depends(get_endpoint_manager),
+    current_endpoint: Endpoint = Depends(get_authenticate_endpoint)
 ):
     """Remove an endpoint."""
-    # Authenticate endpoint
-    authenticate_endpoint = get_authenticate_endpoint(request)
-    current_endpoint = await authenticate_endpoint(request)
     
     # Verify endpoint can only remove itself
     if current_endpoint.id != endpoint_id:
@@ -264,12 +268,10 @@ async def submit_repository_info(
     endpoint_id: str,
     repo_request: RepositorySubmissionRequest,
     request: Request,
-    endpoint_manager: EndpointManager = Depends(get_endpoint_manager)
+    endpoint_manager: EndpointManager = Depends(get_endpoint_manager),
+    current_endpoint: Endpoint = Depends(get_authenticate_endpoint)
 ):
     """Submit repository information for an endpoint."""
-    # Authenticate endpoint
-    authenticate_endpoint = get_authenticate_endpoint(request)
-    current_endpoint = await authenticate_endpoint(request)
     
     # Verify endpoint can only submit its own repository info
     if current_endpoint.id != endpoint_id:

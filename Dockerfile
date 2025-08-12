@@ -10,6 +10,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PIP_NO_CACHE_DIR=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PYTHONPATH=/app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -75,7 +76,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8080/health/ready || exit 1
 
 # Development command with hot reload
-CMD ["python3", "-m", "uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+CMD ["python3", "start-dev.py"]
 
 # Production build stage
 FROM base as builder
@@ -102,6 +103,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONPATH=/app
 
 # Install minimal runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -140,4 +142,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8080/health/ready || exit 1
 
 # Production command
-CMD ["python3", "-m", "uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "4"]
+CMD ["python3", "start-prod.py"]

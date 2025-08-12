@@ -9,15 +9,27 @@ import logging
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
 from shared.models import SyncOperation, OperationType, OperationStatus, Endpoint
 from server.core.sync_coordinator import SyncCoordinator
-from server.api.endpoints import authenticate_endpoint
 from server.database.orm import ValidationError, NotFoundError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# HTTP Bearer token scheme
+security = HTTPBearer(auto_error=False)
+
+
+async def get_authenticate_endpoint(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+) -> Endpoint:
+    """Get the authenticate_endpoint dependency from app state."""
+    auth_func = request.app.state.authenticate_endpoint
+    return await auth_func(request, credentials)
 
 
 # Request/Response Models
@@ -122,9 +134,10 @@ def operation_to_response(operation: SyncOperation) -> SyncOperationResponse:
 @router.post("/sync/{endpoint_id}/sync-to-latest", response_model=SyncOperationResponse)
 async def sync_to_latest(
     endpoint_id: str,
-    request: SyncOperationRequest,
-    current_endpoint: Endpoint = Depends(authenticate_endpoint),
-    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator)
+    request_obj: SyncOperationRequest,
+    request: Request,
+    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator),
+    current_endpoint: Endpoint = Depends(get_authenticate_endpoint)
 ):
     """
     Sync endpoint to the latest pool state.
@@ -132,6 +145,7 @@ async def sync_to_latest(
     This endpoint triggers a synchronization operation that updates all packages
     on the endpoint to match the latest target state defined for its pool.
     """
+    
     # Verify endpoint can only sync itself
     if current_endpoint.id != endpoint_id:
         raise HTTPException(status_code=403, detail="Can only sync own endpoint")
@@ -161,9 +175,10 @@ async def sync_to_latest(
 @router.post("/sync/{endpoint_id}/set-as-latest", response_model=SyncOperationResponse)
 async def set_as_latest(
     endpoint_id: str,
-    request: SyncOperationRequest,
-    current_endpoint: Endpoint = Depends(authenticate_endpoint),
-    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator)
+    request_obj: SyncOperationRequest,
+    request: Request,
+    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator),
+    current_endpoint: Endpoint = Depends(get_authenticate_endpoint)
 ):
     """
     Set endpoint's current state as the pool's latest target state.
@@ -171,6 +186,7 @@ async def set_as_latest(
     This endpoint captures the current package state of the endpoint and
     sets it as the new synchronization target for all endpoints in the pool.
     """
+    
     # Verify endpoint can only set its own state as latest
     if current_endpoint.id != endpoint_id:
         raise HTTPException(status_code=403, detail="Can only set own endpoint as latest")
@@ -200,9 +216,10 @@ async def set_as_latest(
 @router.post("/sync/{endpoint_id}/revert", response_model=SyncOperationResponse)
 async def revert_to_previous(
     endpoint_id: str,
-    request: SyncOperationRequest,
-    current_endpoint: Endpoint = Depends(authenticate_endpoint),
-    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator)
+    request_obj: SyncOperationRequest,
+    request: Request,
+    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator),
+    current_endpoint: Endpoint = Depends(get_authenticate_endpoint)
 ):
     """
     Revert endpoint to its previous package state.
@@ -210,6 +227,7 @@ async def revert_to_previous(
     This endpoint reverts the endpoint's packages to the previous known state,
     effectively undoing the last synchronization or package changes.
     """
+    
     # Verify endpoint can only revert itself
     if current_endpoint.id != endpoint_id:
         raise HTTPException(status_code=403, detail="Can only revert own endpoint")
@@ -320,9 +338,10 @@ async def cancel_operation(
 @router.get("/sync/{endpoint_id}/operations", response_model=OperationListResponse)
 async def get_endpoint_operations(
     endpoint_id: str,
+    request: Request,
     limit: int = 10,
-    current_endpoint: Endpoint = Depends(authenticate_endpoint),
-    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator)
+    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator),
+    current_endpoint: Endpoint = Depends(get_authenticate_endpoint)
 ):
     """
     Get recent synchronization operations for an endpoint.
@@ -330,6 +349,7 @@ async def get_endpoint_operations(
     This endpoint returns a list of recent synchronization operations
     for the specified endpoint, including their status and details.
     """
+    
     # Verify endpoint can only view its own operations
     if current_endpoint.id != endpoint_id:
         raise HTTPException(status_code=403, detail="Can only view own endpoint operations")

@@ -1,0 +1,45 @@
+[Unit]
+Description=Pacman Sync Utility Client
+Documentation=man:pacman-sync-client(1)
+After=graphical-session.target
+Wants=graphical-session.target
+PartOf=graphical-session.target
+Requisite=graphical-session.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/pacman-sync-client
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=0
+TimeoutStartSec=30
+TimeoutStopSec=10
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Environment variables for GUI applications
+Environment=DISPLAY=:0
+Environment=QT_QPA_PLATFORM=xcb
+Environment=XDG_RUNTIME_DIR=%i
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+Environment=QT_AUTO_SCREEN_SCALE_FACTOR=1
+Environment=QT_SCALE_FACTOR_ROUNDING_POLICY=RoundPreferFloor
+
+# Security settings (appropriate for user service)
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+
+# Resource limits
+MemoryMax=512M
+TasksMax=100
+
+[Install]
+WantedBy=default.target
+Also=pacman-sync-client-tray.service

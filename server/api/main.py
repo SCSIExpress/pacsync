@@ -27,6 +27,7 @@ from server.api.pools import router as pools_router
 from server.api.endpoints import router as endpoints_router
 from server.api.sync import router as sync_router
 from server.api.repositories import router as repositories_router
+from server.api.states import router as states_router
 from server.api.health import router as health_router
 
 # Import enhanced error handling
@@ -46,13 +47,17 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager with graceful shutdown support."""
     logger.info("Starting Pacman Sync Utility Server...")
     
+    # Get configuration
+    from server.config import get_config
+    config = get_config()
+    
     # Set up graceful shutdown handler
     from server.core.shutdown_handler import setup_graceful_shutdown, shutdown_cleanup
     shutdown_handler = setup_graceful_shutdown(shutdown_timeout=30)
     shutdown_handler.register_cleanup_task(shutdown_cleanup)
     
     # Initialize database
-    db_manager = DatabaseManager()
+    db_manager = DatabaseManager(config.database.type, config.database.url)
     await db_manager.initialize()
     
     # Register database cleanup
@@ -315,6 +320,7 @@ def create_app() -> FastAPI:
     app.include_router(endpoints_router, prefix="/api", tags=["endpoints"])
     app.include_router(sync_router, prefix="/api", tags=["sync"])
     app.include_router(repositories_router, prefix="/api", tags=["repositories"])
+    app.include_router(states_router, prefix="/api", tags=["states"])
     
     # Serve static files for web UI
     web_dist_path = os.path.join(os.path.dirname(__file__), "..", "web", "dist")

@@ -297,6 +297,34 @@ class ClientConfiguration(IConfigurationManager):
         """Get server request timeout."""
         return self.get_config('server.timeout', 30.0)
     
+    def get_debug_mode(self) -> bool:
+        """Get debug mode setting."""
+        return self.get_config('advanced.debug_mode', False)
+    
+    def get_structured_logging(self) -> bool:
+        """Get structured logging setting."""
+        return self.get_config('logging.structured_logging', False)
+    
+    def get_retry_attempts(self) -> int:
+        """Get retry attempts setting."""
+        return self.get_config('server.retry_attempts', 3)
+    
+    def get_retry_delay(self) -> float:
+        """Get retry delay setting."""
+        return self.get_config('server.retry_delay', 5.0)
+    
+    def get_update_interval(self) -> int:
+        """Get status update interval."""
+        return self.get_config('client.update_interval', 300)
+    
+    def get_log_file(self) -> Optional[str]:
+        """Get log file path."""
+        return self.get_config('logging.log_file')
+    
+    def get_quiet_mode(self) -> bool:
+        """Get quiet mode setting."""
+        return self.get_config('logging.quiet_mode', False)
+    
     def get_retry_attempts(self) -> int:
         """Get number of retry attempts."""
         return self.get_config('server.retry_attempts', 3)

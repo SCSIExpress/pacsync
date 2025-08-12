@@ -542,13 +542,13 @@ class PacmanSyncAPIClient(IAPIClient):
             
             response = await self._make_request(
                 method='POST',
-                endpoint=f'/api/states/{endpoint_id}',
-                data=state_data
+                endpoint=f'/api/sync/{endpoint_id}/set-as-latest',
+                data={}  # SyncOperationRequest is empty
             )
             
-            state_id = response.get('state_id', '')
-            logger.info(f"State submitted successfully: {state_id}")
-            return state_id
+            operation_id = response.get('id', '')
+            logger.info(f"Set-as-latest operation started: {operation_id}")
+            return operation_id
             
         except Exception as e:
             logger.error(f"Failed to submit state: {e}")

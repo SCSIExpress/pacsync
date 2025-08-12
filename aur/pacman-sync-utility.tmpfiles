@@ -1,0 +1,5 @@
+# Temporary files and directories for pacman-sync-utility
+d /var/lib/pacman-sync-utility 0755 pacman-sync pacman-sync -
+d /var/lib/pacman-sync-utility/database 0755 pacman-sync pacman-sync -
+d /var/lib/pacman-sync-utility/logs 0755 pacman-sync pacman-sync -
+d /etc/pacman-sync-utility 0755 root root -

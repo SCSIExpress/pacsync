@@ -1,0 +1,102 @@
+[Unit]
+Description=Pacman Sync Utility Server
+Documentation=https://github.com/your-org/pacman-sync-utility/blob/main/docs/README.md
+Documentation=https://github.com/your-org/pacman-sync-utility
+After=network.target network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+Requires=network.target
+
+[Service]
+Type=exec
+User=pacman-sync
+Group=pacman-sync
+WorkingDirectory=/var/lib/pacman-sync-utility
+
+# Environment setup
+Environment=PYTHONPATH=/usr/lib/python3.12/site-packages
+Environment=CONFIG_FILE=/etc/pacman-sync-utility/server.conf
+Environment=DATABASE_URL=sqlite:///var/lib/pacman-sync-utility/database/server.db
+Environment=LOG_FILE=/var/lib/pacman-sync-utility/logs/server.log
+# Override DATABASE_URL if PostgreSQL is configured
+EnvironmentFile=-/etc/pacman-sync-utility/database.env
+
+# Main service command - use the installed wrapper script
+ExecStart=/usr/bin/pacman-sync-server
+
+# Reload configuration on SIGHUP
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Pre-start checks and directory creation
+ExecStartPre=/bin/bash -c 'test -f /etc/pacman-sync-utility/server.conf || (echo "Configuration file not found: /etc/pacman-sync-utility/server.conf" && exit 1)'
+ExecStartPre=/bin/bash -c 'test -d /var/lib/pacman-sync-utility/database || mkdir -p /var/lib/pacman-sync-utility/database'
+ExecStartPre=/bin/bash -c 'test -d /var/lib/pacman-sync-utility/logs || mkdir -p /var/lib/pacman-sync-utility/logs'
+ExecStartPre=/bin/bash -c 'chown -R pacman-sync:pacman-sync /var/lib/pacman-sync-utility'
+
+# Restart configuration
+Restart=always
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+
+# Process management
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Security settings - comprehensive hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+PrivateDevices=true
+PrivateUsers=true
+ProtectHostname=true
+
+# File system access - only allow access to necessary directories
+ReadWritePaths=/var/lib/pacman-sync-utility
+ReadOnlyPaths=/etc/pacman-sync-utility
+ReadOnlyPaths=/usr/lib/python3.12/site-packages
+
+# Network access - allow network for server functionality
+PrivateNetwork=false
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# System calls - restrict to safe system calls
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @cpu-emulation @obsolete @privileged @reboot @swap @raw-io @resources
+
+# Capabilities - drop all capabilities
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+LimitCORE=0
+MemoryMax=1G
+TasksMax=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pacman-sync-server
+
+# Additional security
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictNamespaces=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
