@@ -60,6 +60,14 @@ class MigrationManager:
             up_sql=self._get_indexes_sql(),
             down_sql=self._get_drop_indexes_sql()
         ))
+        
+        # Migration 004: Add mirrors column to repositories table
+        self.migrations.append(Migration(
+            version="004",
+            description="Add mirrors column to repositories table",
+            up_sql=self._get_add_mirrors_column_sql(),
+            down_sql=self._get_drop_mirrors_column_sql()
+        ))
     
     def _get_initial_schema_sql(self) -> str:
         """Get SQL for initial schema creation."""
@@ -267,6 +275,35 @@ class MigrationManager:
             DROP INDEX IF EXISTS idx_sync_operations_status;
             DROP INDEX IF EXISTS idx_sync_operations_created_at;
         """
+    
+    def _get_add_mirrors_column_sql(self) -> str:
+        """Get SQL to add mirrors column to repositories table."""
+        if self.db_manager.database_type == "postgresql":
+            return """
+                ALTER TABLE repositories 
+                ADD COLUMN IF NOT EXISTS mirrors JSONB DEFAULT '[]';
+                
+                -- Create index for mirror queries
+                CREATE INDEX IF NOT EXISTS idx_repositories_mirrors 
+                ON repositories USING GIN (mirrors);
+            """
+        else:  # SQLite
+            return """
+                ALTER TABLE repositories 
+                ADD COLUMN mirrors TEXT DEFAULT '[]';
+            """
+    
+    def _get_drop_mirrors_column_sql(self) -> str:
+        """Get SQL to drop mirrors column from repositories table."""
+        if self.db_manager.database_type == "postgresql":
+            return """
+                DROP INDEX IF EXISTS idx_repositories_mirrors;
+                ALTER TABLE repositories DROP COLUMN IF EXISTS mirrors;
+            """
+        else:  # SQLite
+            # SQLite doesn't support DROP COLUMN, so we'd need to recreate the table
+            # For now, just leave the column (it won't hurt anything)
+            return "-- SQLite doesn't support DROP COLUMN, column will remain"
     
     async def _create_migrations_table(self):
         """Create the migrations tracking table."""

@@ -542,13 +542,13 @@ class PacmanSyncAPIClient(IAPIClient):
             
             response = await self._make_request(
                 method='POST',
-                endpoint=f'/api/sync/{endpoint_id}/set-as-latest',
-                data={}  # SyncOperationRequest is empty
+                endpoint=f'/api/states/{endpoint_id}',
+                data=state_data
             )
             
-            operation_id = response.get('id', '')
-            logger.info(f"Set-as-latest operation started: {operation_id}")
-            return operation_id
+            state_id = response.get('state_id', '')
+            logger.info(f"State submitted successfully: {state_id}")
+            return state_id
             
         except Exception as e:
             logger.error(f"Failed to submit state: {e}")
@@ -698,6 +698,7 @@ class PacmanSyncAPIClient(IAPIClient):
                 repo_data.append({
                     'repo_name': repo.repo_name,
                     'repo_url': repo.repo_url,
+                    'mirrors': repo.mirrors if hasattr(repo, 'mirrors') and repo.mirrors else [],
                     'packages': packages_data
                 })
             
@@ -732,6 +733,7 @@ class PacmanSyncAPIClient(IAPIClient):
                     repo_data.append({
                         'repo_name': repo.repo_name,
                         'repo_url': repo.repo_url,
+                        'mirrors': repo.mirrors if hasattr(repo, 'mirrors') and repo.mirrors else [],
                         'packages': packages_data
                     })
                 
@@ -739,6 +741,119 @@ class PacmanSyncAPIClient(IAPIClient):
                     'type': 'repository_submission',
                     'endpoint_id': endpoint_id,
                     'repositories': repo_data,
+                    'timestamp': datetime.now().isoformat()
+                })
+            
+            return False
+    
+    async def assign_to_pool(self, endpoint_id: str, pool_id: str) -> bool:
+        """
+        Assign endpoint to a pool.
+        
+        Args:
+            endpoint_id: ID of the endpoint
+            pool_id: ID of the pool to assign to
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info(f"Assigning endpoint {endpoint_id} to pool {pool_id}")
+            
+            response = await self._make_request(
+                method='PUT',
+                endpoint=f'/api/endpoints/{endpoint_id}/pool',
+                params={'pool_id': pool_id}
+            )
+            
+            logger.info(f"Successfully assigned endpoint to pool")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to assign endpoint to pool: {e}")
+            
+            # Queue for retry if it's a network error
+            if isinstance(e, NetworkError):
+                self._offline_operations.append({
+                    'type': 'pool_assignment',
+                    'endpoint_id': endpoint_id,
+                    'pool_id': pool_id,
+                    'timestamp': datetime.now().isoformat()
+                })
+            
+            return False
+    
+    async def get_pool_assignment(self, endpoint_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get current pool assignment for endpoint.
+        
+        Args:
+            endpoint_id: ID of the endpoint
+            
+        Returns:
+            Pool assignment information or None if not available
+        """
+        try:
+            logger.debug(f"Getting pool assignment for endpoint {endpoint_id}")
+            
+            response = await self._make_request(
+                method='GET',
+                endpoint=f'/api/endpoints/{endpoint_id}/pool'
+            )
+            
+            logger.debug(f"Pool assignment retrieved: {response}")
+            return response
+            
+        except Exception as e:
+            logger.error(f"Failed to get pool assignment: {e}")
+            return None
+    
+    async def submit_repository_info_lightweight(self, endpoint_id: str, repo_info: Dict[str, Dict[str, any]]) -> bool:
+        """
+        Submit lightweight repository information (mirrors only) to server.
+        
+        Args:
+            endpoint_id: ID of the endpoint
+            repo_info: Dictionary of repository information from get_repository_info_for_server()
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info(f"Submitting lightweight repository info for endpoint {endpoint_id}")
+            
+            # Convert repo_info format to API format
+            repositories = {}
+            for repo_name, info in repo_info.items():
+                repositories[repo_name] = {
+                    "name": info["name"],
+                    "mirrors": info["mirrors"],
+                    "primary_url": info["primary_url"],
+                    "architecture": info["architecture"],
+                    "endpoint_id": info["endpoint_id"]
+                }
+            
+            data = {"repositories": repositories}
+            
+            # Use the standard _make_request method for consistency
+            response = await self._make_request(
+                method='POST',
+                endpoint=f'/api/endpoints/{endpoint_id}/repository-info',
+                data=data
+            )
+            
+            logger.info(f"Successfully submitted repository info: {response.get('repositories_count', 0)} repositories, {response.get('total_mirrors', 0)} mirrors")
+            return True
+                    
+        except Exception as e:
+            logger.error(f"Failed to submit lightweight repository info: {e}")
+            
+            # Queue for retry if it's a network error
+            if isinstance(e, NetworkError):
+                self._offline_operations.append({
+                    'type': 'repository_info_submission',
+                    'endpoint_id': endpoint_id,
+                    'repo_info': repo_info,
                     'timestamp': datetime.now().isoformat()
                 })
             

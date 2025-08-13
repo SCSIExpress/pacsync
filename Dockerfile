@@ -69,11 +69,11 @@ RUN mkdir -p /app/data /app/logs /app/config && \
 USER pacman-sync
 
 # Expose port
-EXPOSE 8080
+EXPOSE 4444
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8080/health/ready || exit 1
+    CMD curl -f http://localhost:4444/health/ready || exit 1
 
 # Development command with hot reload
 CMD ["python3", "start-dev.py"]
@@ -135,11 +135,11 @@ RUN mkdir -p /app/data /app/logs /app/config && \
 USER pacman-sync
 
 # Expose port
-EXPOSE 8080
+EXPOSE 4444
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8080/health/ready || exit 1
+    CMD curl -f http://localhost:4444/health/ready || exit 1
 
 # Production command
 CMD ["python3", "start-prod.py"]

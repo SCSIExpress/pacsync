@@ -214,6 +214,7 @@ async def get_endpoint_repository_info(
                 "id": repo.id,
                 "repo_name": repo.repo_name,
                 "repo_url": repo.repo_url,
+                "mirrors": repo.mirrors,
                 "packages": packages_data,
                 "last_updated": repo.last_updated.isoformat()
             })

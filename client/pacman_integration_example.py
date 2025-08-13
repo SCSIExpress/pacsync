@@ -68,18 +68,67 @@ class PacmanSyncIntegration:
         pacman repository information to the central server.
         """
         try:
+            # Get lightweight repository info with mirrors for server analysis
+            repo_info = self.pacman.get_repository_info_for_server(endpoint_id)
+            
+            logger.info(f"Retrieved repository information for {len(repo_info)} repositories")
+            
+            # Log summary of repository data with mirror counts
+            for repo_name, info in repo_info.items():
+                mirror_count = len(info.get('mirrors', []))
+                logger.info(f"  {repo_name}: {mirror_count} mirrors, primary: {info.get('primary_url', 'none')}")
+            
+            return repo_info
+            
+        except Exception as e:
+            logger.error(f"Failed to get repository information: {e}")
+            raise
+    
+    async def submit_repository_information(self, api_client, endpoint_id: str):
+        """
+        Submit repository information to the server using the lightweight API.
+        
+        This uses the new lightweight endpoint that only sends mirror information
+        without package lists, making it much faster and more efficient.
+        """
+        try:
+            # Get lightweight repository info
+            repo_info = self.get_repository_information(endpoint_id)
+            
+            # Submit using the lightweight API
+            success = await api_client.submit_repository_info_lightweight(endpoint_id, repo_info)
+            
+            if success:
+                logger.info("Repository information submitted successfully")
+            else:
+                logger.error("Failed to submit repository information")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Failed to submit repository information: {e}")
+            return False
+    
+    def get_full_repository_information(self, endpoint_id: str):
+        """
+        Get full repository information including package lists.
+        
+        This is more expensive as it queries all packages from each repository.
+        Use get_repository_information() for lightweight mirror info only.
+        """
+        try:
             repositories = self.pacman.get_all_repositories(endpoint_id)
             
-            logger.info(f"Retrieved repository information for {len(repositories)} repositories")
+            logger.info(f"Retrieved full repository information for {len(repositories)} repositories")
             
             # Log summary of repository data
             for repo in repositories:
-                logger.info(f"  {repo.repo_name}: {len(repo.packages)} packages")
+                logger.info(f"  {repo.repo_name}: {len(repo.packages)} packages, mirrors: {len(repo.mirrors)}")
             
             return repositories
             
         except Exception as e:
-            logger.error(f"Failed to get repository information: {e}")
+            logger.error(f"Failed to get full repository information: {e}")
             raise
     
     def detect_sync_status(self, target_state: Optional[dict] = None) -> SyncStatus:

@@ -28,6 +28,8 @@ from server.api.endpoints import router as endpoints_router
 from server.api.sync import router as sync_router
 from server.api.repositories import router as repositories_router
 from server.api.states import router as states_router
+from server.api.package_sync import router as package_sync_router
+from server.api.dashboard import router as dashboard_router
 from server.api.health import router as health_router
 
 # Import enhanced error handling
@@ -321,6 +323,8 @@ def create_app() -> FastAPI:
     app.include_router(sync_router, prefix="/api", tags=["sync"])
     app.include_router(repositories_router, prefix="/api", tags=["repositories"])
     app.include_router(states_router, prefix="/api", tags=["states"])
+    app.include_router(package_sync_router, tags=["package-sync"])
+    app.include_router(dashboard_router, tags=["dashboard"])
     
     # Serve static files for web UI
     web_dist_path = os.path.join(os.path.dirname(__file__), "..", "web", "dist")

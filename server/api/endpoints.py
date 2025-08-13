@@ -72,6 +72,7 @@ class RepositoryPackageData(BaseModel):
 class RepositoryData(BaseModel):
     repo_name: str
     repo_url: Optional[str] = None
+    mirrors: List[str] = []
     packages: List[RepositoryPackageData]
     
     @validator('repo_name')
@@ -83,10 +84,48 @@ class RepositoryData(BaseModel):
         if v is not None:
             return validate_url(v)
         return v
+    
+    @validator('mirrors')
+    def validate_mirrors(cls, v):
+        if v:
+            for mirror_url in v:
+                validate_url(mirror_url)
+        return v
 
 
 class RepositorySubmissionRequest(BaseModel):
     repositories: List[RepositoryData]
+
+
+class RepositoryInfoData(BaseModel):
+    """Lightweight repository info without packages."""
+    name: str
+    mirrors: List[str]
+    primary_url: str
+    architecture: str
+    endpoint_id: str
+    
+    @validator('name')
+    def validate_name(cls, v):
+        return validate_repository_name(v)
+    
+    @validator('primary_url')
+    def validate_primary_url(cls, v):
+        if v:
+            return validate_url(v)
+        return v
+    
+    @validator('mirrors')
+    def validate_mirrors(cls, v):
+        if v:
+            for mirror_url in v:
+                validate_url(mirror_url)
+        return v
+
+
+class RepositoryInfoSubmissionRequest(BaseModel):
+    """Request for submitting lightweight repository info."""
+    repositories: Dict[str, RepositoryInfoData]
 
 
 class EndpointResponse(BaseModel):
@@ -296,6 +335,7 @@ async def submit_repository_info(
                 endpoint_id=endpoint_id,
                 repo_name=repo_data.repo_name,
                 repo_url=repo_data.repo_url,
+                mirrors=repo_data.mirrors,
                 packages=packages
             ))
         
@@ -309,6 +349,83 @@ async def submit_repository_info(
         raise
     except Exception as e:
         logger.error(f"Failed to submit repository info: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to submit repository info: {str(e)}")
+
+
+@router.get("/endpoints/{endpoint_id}/pool")
+async def get_endpoint_pool_assignment(
+    endpoint_id: str,
+    endpoint_manager: EndpointManager = Depends(get_endpoint_manager),
+    current_endpoint: Endpoint = Depends(get_authenticate_endpoint)
+):
+    """Get the current pool assignment for an endpoint."""
+    
+    # Verify endpoint can only query its own pool assignment
+    if current_endpoint.id != endpoint_id:
+        raise HTTPException(status_code=403, detail="Can only query own pool assignment")
+    
+    try:
+        endpoint = await endpoint_manager.get_endpoint(endpoint_id)
+        if not endpoint:
+            raise HTTPException(status_code=404, detail="Endpoint not found")
+        
+        return {
+            "endpoint_id": endpoint_id,
+            "pool_id": endpoint.pool_id,
+            "pool_assigned": endpoint.pool_id is not None,
+            "sync_status": endpoint.sync_status.value,
+            "last_updated": endpoint.updated_at.isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get pool assignment for endpoint {endpoint_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get pool assignment: {str(e)}")
+
+
+@router.post("/endpoints/{endpoint_id}/repository-info")
+async def submit_repository_info_lightweight(
+    endpoint_id: str,
+    repo_request: RepositoryInfoSubmissionRequest,
+    request: Request,
+    endpoint_manager: EndpointManager = Depends(get_endpoint_manager),
+    current_endpoint: Endpoint = Depends(get_authenticate_endpoint)
+):
+    """Submit lightweight repository information (mirrors only) for an endpoint."""
+    
+    # Verify endpoint can only submit its own repository info
+    if current_endpoint.id != endpoint_id:
+        raise HTTPException(status_code=403, detail="Can only submit own repository information")
+    
+    try:
+        # Convert request data to Repository objects (without packages)
+        repositories = []
+        for repo_name, repo_info in repo_request.repositories.items():
+            # Use primary_url as repo_url, store additional mirrors separately
+            repositories.append(Repository(
+                id="",  # Will be generated
+                endpoint_id=endpoint_id,
+                repo_name=repo_name,
+                repo_url=repo_info.primary_url,
+                mirrors=repo_info.mirrors,
+                packages=[]  # No packages in lightweight submission
+            ))
+        
+        success = await endpoint_manager.update_repository_info(endpoint_id, repositories)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update repository information")
+        
+        return {
+            "message": "Repository information updated successfully",
+            "repositories_count": len(repositories),
+            "total_mirrors": sum(len(repo.mirrors) for repo in repositories)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to submit lightweight repository info: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to submit repository info: {str(e)}")
 
 

@@ -24,10 +24,11 @@ class TokenManager:
     automatic refresh, and secure storage integration.
     """
     
-    def __init__(self, api_client=None, refresh_threshold_minutes: int = 60):
+    def __init__(self, api_client=None, refresh_threshold_minutes: int = 60, config=None):
         self.api_client = api_client
         self.token_storage = SecureTokenStorage()
         self.refresh_threshold = timedelta(minutes=refresh_threshold_minutes)
+        self.config = config  # Store config for pool assignment
         
         # Current authentication state
         self._current_endpoint_id: Optional[str] = None
@@ -41,6 +42,14 @@ class TokenManager:
         # Automatic refresh task
         self._refresh_task: Optional[asyncio.Task] = None
         self._refresh_enabled = True
+        
+        # Pool sync task
+        self._pool_sync_task: Optional[asyncio.Task] = None
+        self._pool_sync_enabled = True
+        self._pool_sync_interval = 300  # 5 minutes
+        
+        # Pool assignment handler (will be initialized when needed)
+        self._pool_assignment_handler = None
         
         logger.info("Token manager initialized")
     
@@ -143,9 +152,16 @@ class TokenManager:
             self._current_token = token
             self._token_expires_at = expires_at
             
+            # Query current pool assignment from server
+            await self._sync_pool_assignment(endpoint_id)
+            
             # Start automatic refresh if enabled
             if self._refresh_enabled:
                 await self._start_refresh_task()
+            
+            # Start pool sync task
+            if self._pool_sync_enabled:
+                await self._start_pool_sync_task()
             
             # Notify callbacks
             self._notify_auth_change(True)
@@ -339,6 +355,10 @@ class TokenManager:
         if self._refresh_task and not self._refresh_task.done():
             self._refresh_task.cancel()
         
+        # Cancel pool sync task
+        if self._pool_sync_task and not self._pool_sync_task.done():
+            self._pool_sync_task.cancel()
+        
         # Remove stored token
         if self._current_endpoint_id:
             self.token_storage.remove_token(self._current_endpoint_id)
@@ -388,6 +408,7 @@ class TokenManager:
         logger.info("Shutting down token manager")
         
         self._refresh_enabled = False
+        self._pool_sync_enabled = False
         
         if self._refresh_task and not self._refresh_task.done():
             self._refresh_task.cancel()
@@ -395,3 +416,183 @@ class TokenManager:
                 await self._refresh_task
             except asyncio.CancelledError:
                 pass
+        
+        if self._pool_sync_task and not self._pool_sync_task.done():
+            self._pool_sync_task.cancel()
+            try:
+                await self._pool_sync_task
+            except asyncio.CancelledError:
+                pass
+    
+    async def _sync_pool_assignment(self, endpoint_id: str) -> None:
+        """
+        Sync pool assignment from server.
+        
+        Args:
+            endpoint_id: ID of the endpoint to query
+        """
+        try:
+            logger.debug(f"Syncing pool assignment for endpoint {endpoint_id}")
+            
+            # Query current pool assignment from server
+            pool_info = await self.api_client.get_pool_assignment(endpoint_id)
+            
+            if pool_info:
+                pool_id = pool_info.get('pool_id')
+                pool_assigned = pool_info.get('pool_assigned', False)
+                sync_status = pool_info.get('sync_status', 'unknown')
+                
+                if pool_assigned and pool_id:
+                    logger.info(f"Endpoint is assigned to pool: {pool_id} (status: {sync_status})")
+                    
+                    # Store pool assignment in config if we have one
+                    if self.config and hasattr(self.config, 'set_pool_id'):
+                        self.config.set_pool_id(pool_id)
+                        logger.debug(f"Updated local config with pool_id: {pool_id}")
+                else:
+                    logger.info("Endpoint is not assigned to any pool")
+                    
+                # Notify callbacks about pool assignment status
+                self._notify_pool_assignment_change(pool_id, pool_assigned)
+            else:
+                logger.warning("Could not retrieve pool assignment from server")
+                
+        except Exception as e:
+            logger.error(f"Error syncing pool assignment: {e}")
+            # Don't raise the exception as this is not critical for authentication
+    
+    def _notify_pool_assignment_change(self, pool_id: Optional[str], assigned: bool) -> None:
+        """
+        Notify callbacks about pool assignment changes.
+        
+        Args:
+            pool_id: ID of the assigned pool (None if not assigned)
+            assigned: Whether the endpoint is assigned to a pool
+        """
+        logger.debug(f"Pool assignment changed: pool_id={pool_id}, assigned={assigned}")
+        
+        # Trigger automatic sync when assigned to a pool
+        if self.api_client and self._current_endpoint_id:
+            asyncio.create_task(self._handle_pool_assignment_change(pool_id, assigned))
+    
+    async def _handle_pool_assignment_change(self, pool_id: Optional[str], assigned: bool) -> None:
+        """
+        Handle pool assignment changes asynchronously.
+        
+        Args:
+            pool_id: ID of the assigned pool (None if not assigned)
+            assigned: Whether the endpoint is assigned to a pool
+        """
+        try:
+            # Initialize pool assignment handler if needed
+            if not self._pool_assignment_handler:
+                await self._initialize_pool_assignment_handler()
+            
+            # Handle the pool assignment change
+            if self._pool_assignment_handler:
+                await self._pool_assignment_handler.handle_pool_assignment_change(
+                    pool_id, assigned, self.api_client, self._current_endpoint_id
+                )
+                
+        except Exception as e:
+            logger.error(f"Error handling pool assignment change: {e}")
+    
+    async def _initialize_pool_assignment_handler(self) -> None:
+        """Initialize the pool assignment handler."""
+        try:
+            # Import here to avoid circular imports
+            from client.pool_assignment_handler import PoolAssignmentHandler
+            
+            # Get endpoint name and hostname from config or API client
+            endpoint_name = "unknown"
+            hostname = None
+            
+            if self.config:
+                try:
+                    endpoint_name = self.config.get_endpoint_name()
+                except:
+                    endpoint_name = "unknown"
+                
+                try:
+                    hostname = self.config.get_hostname()
+                except:
+                    import socket
+                    hostname = socket.gethostname()
+            else:
+                import socket
+                hostname = socket.gethostname()
+            
+            # Get server URL from API client
+            server_url = getattr(self.api_client, 'server_url', 'http://localhost:4444')
+            
+            self._pool_assignment_handler = PoolAssignmentHandler(
+                server_url=server_url,
+                endpoint_name=endpoint_name,
+                hostname=hostname
+            )
+            
+            logger.debug("Pool assignment handler initialized")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize pool assignment handler: {e}")
+    
+    async def sync_pool_status(self) -> Optional[Dict[str, Any]]:
+        """
+        Manually sync pool assignment status from server.
+        
+        Returns:
+            Current pool assignment information
+        """
+        if not self._current_endpoint_id:
+            logger.warning("Cannot sync pool status: no endpoint ID available")
+            return None
+            
+        try:
+            pool_info = await self.api_client.get_pool_assignment(self._current_endpoint_id)
+            
+            if pool_info:
+                # Update local state
+                await self._sync_pool_assignment(self._current_endpoint_id)
+                
+            return pool_info
+            
+        except Exception as e:
+            logger.error(f"Failed to sync pool status: {e}")
+            return None
+    
+    async def _start_pool_sync_task(self) -> None:
+        """Start periodic pool sync task."""
+        if self._pool_sync_task and not self._pool_sync_task.done():
+            self._pool_sync_task.cancel()
+        
+        self._pool_sync_task = asyncio.create_task(self._pool_sync_loop())
+    
+    async def _pool_sync_loop(self) -> None:
+        """Periodic pool sync loop."""
+        try:
+            while self._pool_sync_enabled and self._current_endpoint_id:
+                await asyncio.sleep(self._pool_sync_interval)
+                
+                logger.debug("Periodic pool sync check")
+                await self.sync_pool_status()
+                
+        except asyncio.CancelledError:
+            logger.debug("Pool sync task cancelled")
+        except Exception as e:
+            logger.error(f"Error in pool sync loop: {e}")
+    
+    def enable_pool_sync(self, enabled: bool = True, interval: int = 300) -> None:
+        """
+        Enable or disable periodic pool sync.
+        
+        Args:
+            enabled: Whether to enable pool sync
+            interval: Sync interval in seconds
+        """
+        self._pool_sync_enabled = enabled
+        self._pool_sync_interval = interval
+        
+        if enabled and self._current_endpoint_id:
+            asyncio.create_task(self._start_pool_sync_task())
+        elif not enabled and self._pool_sync_task:
+            self._pool_sync_task.cancel()

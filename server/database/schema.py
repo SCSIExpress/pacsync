@@ -58,6 +58,7 @@ POSTGRESQL_SCHEMA = {
             endpoint_id UUID REFERENCES endpoints(id) ON DELETE CASCADE,
             repo_name VARCHAR(255) NOT NULL,
             repo_url VARCHAR(500),
+            mirrors JSONB DEFAULT '[]',
             packages JSONB DEFAULT '[]',
             last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             UNIQUE(endpoint_id, repo_name)
@@ -126,6 +127,7 @@ SQLITE_SCHEMA = {
             endpoint_id TEXT REFERENCES endpoints(id) ON DELETE CASCADE,
             repo_name TEXT NOT NULL,
             repo_url TEXT,
+            mirrors TEXT DEFAULT '[]',
             packages TEXT DEFAULT '[]',
             last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(endpoint_id, repo_name)

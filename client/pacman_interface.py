@@ -160,21 +160,32 @@ class PacmanInterface:
         """
         repositories = []
         
+        # Group repositories by name to handle multiple mirrors
+        repo_groups = {}
         for repo_config in self.config.repositories:
             repo_name = repo_config["name"]
-            repo_url = repo_config.get("server", "")
-            
+            if repo_name not in repo_groups:
+                repo_groups[repo_name] = []
+            repo_groups[repo_name].append(repo_config["server"])
+        
+        for repo_name, servers in repo_groups.items():
             try:
                 packages = self.get_repository_packages(repo_name)
+                
+                # Use the first server URL as primary, but include all mirrors in metadata
+                primary_url = servers[0] if servers else ""
                 
                 repository = Repository(
                     id="",  # Will be set by server
                     endpoint_id=endpoint_id,
                     repo_name=repo_name,
-                    repo_url=repo_url,
+                    repo_url=primary_url,
                     packages=packages,
                     last_updated=datetime.now()
                 )
+                
+                # Add all mirror information including the primary URL
+                repository.mirrors = servers  # Store all mirrors including primary
                 
                 repositories.append(repository)
                 
@@ -185,7 +196,8 @@ class PacmanInterface:
                     id="",
                     endpoint_id=endpoint_id,
                     repo_name=repo_name,
-                    repo_url=repo_url,
+                    repo_url=servers[0] if servers else "",
+                    mirrors=servers,  # Include all mirrors
                     packages=[],
                     last_updated=datetime.now()
                 )
@@ -193,6 +205,55 @@ class PacmanInterface:
         
         logger.info(f"Retrieved information for {len(repositories)} repositories")
         return repositories
+    
+    def get_repository_mirrors(self) -> Dict[str, List[str]]:
+        """
+        Get all configured mirrors for each repository.
+        
+        Returns:
+            Dictionary mapping repository names to lists of mirror URLs
+        """
+        mirrors = {}
+        
+        for repo_config in self.config.repositories:
+            repo_name = repo_config["name"]
+            server_url = repo_config.get("server", "")
+            
+            if repo_name not in mirrors:
+                mirrors[repo_name] = []
+            
+            if server_url and server_url not in mirrors[repo_name]:
+                mirrors[repo_name].append(server_url)
+        
+        return mirrors
+    
+    def get_repository_info_for_server(self, endpoint_id: str) -> Dict[str, Dict[str, any]]:
+        """
+        Get repository information formatted for server analysis.
+        
+        This provides the server with all mirror URLs and repository metadata
+        needed for package overlap analysis without requiring package lists.
+        
+        Args:
+            endpoint_id: Unique identifier for this endpoint
+            
+        Returns:
+            Dictionary with repository information including all mirrors
+        """
+        repo_info = {}
+        mirrors = self.get_repository_mirrors()
+        
+        for repo_name, mirror_urls in mirrors.items():
+            repo_info[repo_name] = {
+                "name": repo_name,
+                "mirrors": mirror_urls,
+                "primary_url": mirror_urls[0] if mirror_urls else "",
+                "architecture": self.config.architecture,
+                "endpoint_id": endpoint_id
+            }
+        
+        logger.info(f"Prepared repository info for {len(repo_info)} repositories")
+        return repo_info
     
     def compare_package_states(self, current_state: SystemState, target_state: SystemState) -> Dict[str, str]:
         """
@@ -238,7 +299,84 @@ class PacmanInterface:
         return differences
     
     def _parse_pacman_config(self) -> PacmanConfig:
-        """Parse pacman.conf to extract configuration."""
+        """Parse pacman configuration using pacman-conf utility."""
+        repositories = []
+        architecture = "x86_64"  # default
+        cache_dir = "/var/cache/pacman/pkg"
+        db_path = "/var/lib/pacman"
+        log_file = "/var/log/pacman.log"
+        
+        try:
+            # Get architecture using pacman-conf
+            arch_result = subprocess.run(["pacman-conf", "Architecture"], 
+                                       capture_output=True, text=True, check=True)
+            architecture = arch_result.stdout.strip()
+            
+            # Get cache directory
+            cache_result = subprocess.run(["pacman-conf", "CacheDir"], 
+                                        capture_output=True, text=True, check=True)
+            cache_dir = cache_result.stdout.strip()
+            
+            # Get database path
+            db_result = subprocess.run(["pacman-conf", "DBPath"], 
+                                     capture_output=True, text=True, check=True)
+            db_path = db_result.stdout.strip()
+            
+            # Get log file
+            log_result = subprocess.run(["pacman-conf", "LogFile"], 
+                                      capture_output=True, text=True, check=True)
+            log_file = log_result.stdout.strip()
+            
+            # Get list of repositories
+            repo_list_result = subprocess.run(["pacman-conf", "--repo-list"], 
+                                            capture_output=True, text=True, check=True)
+            repo_names = repo_list_result.stdout.strip().split('\n')
+            
+            # Get server URLs for each repository
+            for repo_name in repo_names:
+                if repo_name.strip():
+                    try:
+                        # Get all servers for this repository
+                        server_result = subprocess.run(["pacman-conf", "--repo", repo_name, "Server"], 
+                                                     capture_output=True, text=True, check=True)
+                        servers = server_result.stdout.strip().split('\n')
+                        
+                        # Add each server as a separate entry (in case of multiple mirrors)
+                        for server in servers:
+                            server = server.strip()
+                            if server:
+                                repositories.append({
+                                    "name": repo_name,
+                                    "server": server
+                                })
+                                
+                    except subprocess.CalledProcessError as e:
+                        logger.warning(f"Failed to get servers for repository {repo_name}: {e}")
+                        # Add repository without server info
+                        repositories.append({
+                            "name": repo_name,
+                            "server": ""
+                        })
+            
+            logger.info(f"Retrieved configuration for {len(repositories)} repository entries")
+            
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Failed to run pacman-conf: {e}. Falling back to manual parsing.")
+            return self._parse_pacman_config_fallback()
+        except Exception as e:
+            logger.warning(f"Error using pacman-conf: {e}. Falling back to manual parsing.")
+            return self._parse_pacman_config_fallback()
+        
+        return PacmanConfig(
+            architecture=architecture,
+            repositories=repositories,
+            cache_dir=cache_dir,
+            db_path=db_path,
+            log_file=log_file
+        )
+    
+    def _parse_pacman_config_fallback(self) -> PacmanConfig:
+        """Fallback method to parse pacman.conf manually if pacman-conf fails."""
         config_path = "/etc/pacman.conf"
         repositories = []
         architecture = "x86_64"  # default
@@ -298,12 +436,24 @@ class PacmanInterface:
                             "server": server_match.group(1).strip()
                         })
                     elif include_match:
-                        # For Include directives, we'll use a placeholder URL
-                        # In a real implementation, we could parse the mirrorlist file
-                        repositories.append({
-                            "name": current_repo,
-                            "server": f"mirrorlist:{include_match.group(1).strip()}"
-                        })
+                        # For Include directives, try to parse the mirrorlist file
+                        mirrorlist_path = include_match.group(1).strip()
+                        try:
+                            with open(mirrorlist_path, 'r') as ml_file:
+                                for ml_line in ml_file:
+                                    ml_line = ml_line.strip()
+                                    if ml_line.startswith('Server = '):
+                                        server_url = ml_line[9:].strip()  # Remove 'Server = '
+                                        repositories.append({
+                                            "name": current_repo,
+                                            "server": server_url
+                                        })
+                        except Exception as ml_e:
+                            logger.warning(f"Failed to parse mirrorlist {mirrorlist_path}: {ml_e}")
+                            repositories.append({
+                                "name": current_repo,
+                                "server": f"mirrorlist:{mirrorlist_path}"
+                            })
             
         except Exception as e:
             logger.warning(f"Failed to parse pacman.conf: {e}. Using defaults.")

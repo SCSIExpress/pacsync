@@ -745,23 +745,25 @@ class RepositoryRepository:
             if self.db.database_type == "postgresql":
                 query = """
                     UPDATE repositories 
-                    SET repo_url = $3, packages = $4, last_updated = $5
+                    SET repo_url = $3, mirrors = $4, packages = $5, last_updated = $6
                     WHERE endpoint_id = $1 AND repo_name = $2
                     RETURNING *
                 """
                 row = await self.db.fetchrow(
                     query, repository.endpoint_id, repository.repo_name,
-                    repository.repo_url, json.dumps(packages_data), repository.last_updated
+                    repository.repo_url, json.dumps(repository.mirrors), 
+                    json.dumps(packages_data), repository.last_updated
                 )
             else:  # SQLite
                 query = """
                     UPDATE repositories 
-                    SET repo_url = ?, packages = ?, last_updated = ?
+                    SET repo_url = ?, mirrors = ?, packages = ?, last_updated = ?
                     WHERE endpoint_id = ? AND repo_name = ?
                 """
                 await self.db.execute(
-                    query, repository.repo_url, json.dumps(packages_data),
-                    repository.last_updated.isoformat(), repository.endpoint_id, repository.repo_name
+                    query, repository.repo_url, json.dumps(repository.mirrors),
+                    json.dumps(packages_data), repository.last_updated.isoformat(), 
+                    repository.endpoint_id, repository.repo_name
                 )
                 row = await self.db.fetchrow(
                     "SELECT * FROM repositories WHERE endpoint_id = ? AND repo_name = ?",
@@ -771,22 +773,24 @@ class RepositoryRepository:
             # Create new
             if self.db.database_type == "postgresql":
                 query = """
-                    INSERT INTO repositories (id, endpoint_id, repo_name, repo_url, packages, last_updated)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                    INSERT INTO repositories (id, endpoint_id, repo_name, repo_url, mirrors, packages, last_updated)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
                     RETURNING *
                 """
                 row = await self.db.fetchrow(
                     query, repository.id, repository.endpoint_id, repository.repo_name,
-                    repository.repo_url, json.dumps(packages_data), repository.last_updated
+                    repository.repo_url, json.dumps(repository.mirrors), 
+                    json.dumps(packages_data), repository.last_updated
                 )
             else:  # SQLite
                 query = """
-                    INSERT INTO repositories (id, endpoint_id, repo_name, repo_url, packages, last_updated)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO repositories (id, endpoint_id, repo_name, repo_url, mirrors, packages, last_updated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """
                 await self.db.execute(
                     query, repository.id, repository.endpoint_id, repository.repo_name,
-                    repository.repo_url, json.dumps(packages_data), repository.last_updated.isoformat()
+                    repository.repo_url, json.dumps(repository.mirrors),
+                    json.dumps(packages_data), repository.last_updated.isoformat()
                 )
                 row = await self.db.fetchrow("SELECT * FROM repositories WHERE id = ?", repository.id)
         
@@ -824,14 +828,36 @@ class RepositoryRepository:
     
     def _row_to_repository(self, row: Dict[str, Any]) -> Repository:
         """Convert database row to Repository object."""
-        if isinstance(row, tuple):
-            row = {
-                'id': row[0], 'endpoint_id': row[1], 'repo_name': row[2],
-                'repo_url': row[3], 'packages': row[4], 'last_updated': row[5]
-            }
+        # Convert sqlite3.Row to dict if needed
+        if hasattr(row, 'keys'):
+            # This is a sqlite3.Row object, convert to dict
+            row_dict = dict(row)
+        elif isinstance(row, tuple):
+            # Handle both old format (6 columns) and new format (7 columns)
+            if len(row) == 6:
+                row_dict = {
+                    'id': row[0], 'endpoint_id': row[1], 'repo_name': row[2],
+                    'repo_url': row[3], 'packages': row[4], 'last_updated': row[5],
+                    'mirrors': '[]'  # Default empty mirrors for backward compatibility
+                }
+            else:
+                # New format: id, endpoint_id, repo_name, repo_url, packages, last_updated, mirrors
+                row_dict = {
+                    'id': row[0], 'endpoint_id': row[1], 'repo_name': row[2],
+                    'repo_url': row[3], 'packages': row[4], 'last_updated': row[5], 
+                    'mirrors': row[6]
+                }
+        else:
+            row_dict = row
         
         # Parse packages
-        packages_data = json.loads(row['packages']) if row['packages'] else []
+        packages_str = row_dict['packages']
+        try:
+            packages_data = json.loads(packages_str) if packages_str else []
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse packages JSON: {e}, data: {packages_str[:100]}...")
+            packages_data = []
+        
         packages = []
         for pkg_data in packages_data:
             packages.append(RepositoryPackage(
@@ -842,16 +868,25 @@ class RepositoryRepository:
                 description=pkg_data.get('description')
             ))
         
+        # Parse mirrors
+        mirrors_str = row_dict.get('mirrors', '[]')
+        try:
+            mirrors = json.loads(mirrors_str) if mirrors_str else []
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse mirrors JSON: {e}, data: {mirrors_str[:100]}...")
+            mirrors = []
+        
         # Parse timestamp
-        last_updated = row['last_updated']
+        last_updated = row_dict['last_updated']
         if isinstance(last_updated, str):
             last_updated = datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
         
         return Repository(
-            id=row['id'],
-            endpoint_id=row['endpoint_id'],
-            repo_name=row['repo_name'],
-            repo_url=row['repo_url'],
+            id=row_dict['id'],
+            endpoint_id=row_dict['endpoint_id'],
+            repo_name=row_dict['repo_name'],
+            repo_url=row_dict['repo_url'],
+            mirrors=mirrors,
             packages=packages,
             last_updated=last_updated
         )

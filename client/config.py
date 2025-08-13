@@ -176,9 +176,28 @@ class ClientConfiguration(IConfigurationManager):
         """Get endpoint name."""
         return self._overrides.get('endpoint_name') or self._config_data['client']['endpoint_name']
     
+    def get_hostname(self) -> str:
+        """Get hostname."""
+        import socket
+        return socket.gethostname()
+    
     def get_pool_id(self) -> Optional[str]:
         """Get assigned pool ID."""
         return self._overrides.get('pool_id') or self._config_data['client'].get('pool_id')
+    
+    def set_pool_id(self, pool_id: Optional[str]) -> None:
+        """
+        Set pool ID (typically from server assignment).
+        
+        Args:
+            pool_id: Pool ID assigned by server (None to clear)
+        """
+        if pool_id:
+            self._overrides['pool_id'] = pool_id
+            logger.info(f"Pool ID updated to: {pool_id}")
+        else:
+            self._overrides.pop('pool_id', None)
+            logger.info("Pool ID cleared")
     
     def get_config(self, key: str, default: Any = None) -> Any:
         """

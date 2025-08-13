@@ -6,7 +6,7 @@ import {
   ChartBarIcon,
   ExclamationTriangleIcon
 } from '@heroicons/react/24/outline'
-import { poolsApi, endpointsApi } from '../services/api'
+import { poolsApi, endpointsApi, dashboardApi } from '../services/api'
 
 function StatusCard({ title, value, icon: Icon, color = 'primary', subtitle }) {
   const colorClasses = {
@@ -91,23 +91,34 @@ function PoolStatusCard({ pool }) {
 function Dashboard() {
   const [poolStatuses, setPoolStatuses] = useState([])
   const [endpoints, setEndpoints] = useState([])
+  const [metrics, setMetrics] = useState(null)
+  const [systemStats, setSystemStats] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
   useEffect(() => {
     loadDashboardData()
+    
+    // Refresh data every 30 seconds
+    const interval = setInterval(loadDashboardData, 30000)
+    return () => clearInterval(interval)
   }, [])
 
   const loadDashboardData = async () => {
     try {
       setLoading(true)
-      const [poolStatusesData, endpointsData] = await Promise.all([
-        poolsApi.getAllPoolStatuses(),
-        endpointsApi.getEndpoints()
+      const [poolStatusesData, endpointsData, metricsData, systemStatsData] = await Promise.all([
+        dashboardApi.getPoolStatuses(),
+        endpointsApi.getEndpoints(),
+        dashboardApi.getMetrics(),
+        dashboardApi.getSystemStats()
       ])
       
       setPoolStatuses(poolStatusesData)
       setEndpoints(endpointsData)
+      setMetrics(metricsData)
+      setSystemStats(systemStatsData)
+      setError(null) // Clear any previous errors
     } catch (err) {
       setError('Failed to load dashboard data')
       console.error('Dashboard load error:', err)
@@ -140,11 +151,6 @@ function Dashboard() {
     )
   }
 
-  const totalEndpoints = endpoints.length
-  const unassignedEndpoints = endpoints.filter(e => !e.pool_id).length
-  const totalPools = poolStatuses.length
-  const healthyPools = poolStatuses.filter(p => p.overall_status === 'healthy').length
-
   return (
     <div className="px-4 sm:px-0">
       {/* Header */}
@@ -153,38 +159,100 @@ function Dashboard() {
         <p className="mt-2 text-gray-600">
           Overview of your package synchronization system
         </p>
+        {metrics && (
+          <p className="mt-1 text-sm text-gray-500">
+            Server uptime: {metrics.server_uptime_human} • Last updated: {new Date(metrics.last_updated).toLocaleTimeString()}
+          </p>
+        )}
       </div>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <StatusCard
           title="Total Pools"
-          value={totalPools}
+          value={metrics?.total_pools || 0}
           icon={CircleStackIcon}
           color="primary"
-          subtitle={`${healthyPools} healthy`}
+          subtitle={`${metrics?.pools_healthy || 0} healthy`}
         />
         <StatusCard
           title="Total Endpoints"
-          value={totalEndpoints}
+          value={metrics?.total_endpoints || 0}
           icon={ComputerDesktopIcon}
           color="success"
-          subtitle={`${unassignedEndpoints} unassigned`}
+          subtitle={`${metrics?.endpoints_unassigned || 0} unassigned`}
         />
         <StatusCard
           title="Sync Rate"
-          value={totalPools > 0 ? `${Math.round(poolStatuses.reduce((acc, p) => acc + p.sync_percentage, 0) / totalPools)}%` : '0%'}
+          value={`${metrics?.average_sync_percentage || 0}%`}
           icon={ChartBarIcon}
           color="warning"
           subtitle="Average across pools"
         />
         <StatusCard
           title="Issues"
-          value={poolStatuses.filter(p => p.overall_status !== 'healthy').length}
+          value={metrics?.pools_with_issues || 0}
           icon={ExclamationTriangleIcon}
           color="danger"
           subtitle="Pools needing attention"
         />
+      </div>
+
+      {/* Additional Metrics Row */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="card p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Repository Statistics</h3>
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-gray-600">Total Repositories:</span>
+              <span className="font-semibold">{metrics?.total_repositories || 0}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Available Packages:</span>
+              <span className="font-semibold">{(metrics?.total_packages_available || 0).toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Target State Packages:</span>
+              <span className="font-semibold">{(metrics?.total_packages_in_target_states || 0).toLocaleString()}</span>
+            </div>
+          </div>
+        </div>
+        
+        <div className="card p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Endpoint Status</h3>
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-gray-600">Online:</span>
+              <span className="font-semibold text-success-600">{metrics?.endpoints_online || 0}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Offline:</span>
+              <span className="font-semibold text-danger-600">{metrics?.endpoints_offline || 0}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Unassigned:</span>
+              <span className="font-semibold text-warning-600">{metrics?.endpoints_unassigned || 0}</span>
+            </div>
+          </div>
+        </div>
+        
+        <div className="card p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">System Information</h3>
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-gray-600">Database:</span>
+              <span className="font-semibold">{systemStats?.database_type || 'Unknown'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Sync Operations:</span>
+              <span className="font-semibold">{systemStats?.total_sync_operations || 0}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Uptime:</span>
+              <span className="font-semibold">{metrics?.server_uptime_human || '0s'}</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Pool Status Cards */}

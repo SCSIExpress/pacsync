@@ -70,7 +70,7 @@ export const poolsApi = {
 
   // Get all pool statuses
   async getAllPoolStatuses() {
-    const response = await api.get('/pools/status')
+    const response = await api.get('/dashboard/pool-statuses')
     return response.data
   },
 
@@ -194,6 +194,33 @@ export const repositoriesApi = {
   // Get package conflicts for a pool
   async getPackageConflicts(poolId) {
     const response = await api.get(`/repositories/conflicts/${poolId}`)
+    return response.data
+  }
+}
+
+// Dashboard API functions
+export const dashboardApi = {
+  // Get dashboard metrics
+  async getMetrics() {
+    const response = await api.get('/dashboard/metrics')
+    return response.data
+  },
+
+  // Get pool statuses
+  async getPoolStatuses() {
+    const response = await api.get('/dashboard/pool-statuses')
+    return response.data
+  },
+
+  // Get system statistics
+  async getSystemStats() {
+    const response = await api.get('/dashboard/system-stats')
+    return response.data
+  },
+
+  // Health check
+  async healthCheck() {
+    const response = await api.get('/dashboard/health')
     return response.data
   }
 }

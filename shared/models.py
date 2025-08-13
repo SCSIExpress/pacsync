@@ -212,11 +212,20 @@ class Repository:
     repo_url: Optional[str] = None
     packages: List[RepositoryPackage] = field(default_factory=list)
     last_updated: datetime = field(default_factory=datetime.now)
+    mirrors: List[str] = field(default_factory=list)  # Additional mirror URLs
     
     def __post_init__(self):
         if not self.id:
             self.id = str(uuid.uuid4())
         if not self.endpoint_id:
             raise ValueError("Endpoint ID cannot be empty")
+    
+    def get_all_urls(self) -> List[str]:
+        """Get all available URLs (primary + mirrors) for this repository."""
+        urls = []
+        if self.repo_url:
+            urls.append(self.repo_url)
+        urls.extend(self.mirrors)
+        return urls
         if not self.repo_name:
             raise ValueError("Repository name cannot be empty")
