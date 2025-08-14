@@ -38,15 +38,91 @@ class ClientConfiguration(IConfigurationManager):
     
     def _get_default_config_path(self) -> str:
         """Get default configuration file path."""
-        # Try XDG config directory first
-        xdg_config = os.environ.get('XDG_CONFIG_HOME')
-        if xdg_config:
-            config_dir = Path(xdg_config) / 'pacman-sync'
-        else:
-            config_dir = Path.home() / '.config' / 'pacman-sync'
-        
+        # Use simplified user config directory: ~/.pacsync/client.conf
+        config_dir = Path.home() / '.pacsync'
         config_dir.mkdir(parents=True, exist_ok=True)
-        return str(config_dir / 'client.conf')
+        user_config_path = str(config_dir / 'client.conf')
+        
+        # If no user config exists, try to copy from system template or create default
+        if not os.path.exists(user_config_path):
+            # Check for system templates (for migration from existing installations)
+            template_paths = [
+                "/etc/pacman-sync/client/client.conf",
+                "/etc/pacman-sync-utility/client.conf",
+                str(Path(__file__).parent.parent / "config" / "client.conf.template")
+            ]
+            
+            template_copied = False
+            for template_path in template_paths:
+                if os.path.exists(template_path):
+                    try:
+                        import shutil
+                        shutil.copy2(template_path, user_config_path)
+                        logger.info(f"Copied configuration template from {template_path} to {user_config_path}")
+                        template_copied = True
+                        break
+                    except Exception as e:
+                        logger.warning(f"Failed to copy config template from {template_path}: {e}")
+            
+            # If no template was found, create a minimal default config
+            if not template_copied:
+                self._create_default_config(user_config_path)
+        
+        return user_config_path
+    
+    def _create_default_config(self, config_path: str) -> None:
+        """Create a minimal default configuration file."""
+        try:
+            default_config = """# Pacman Sync Utility Client Configuration
+# Configuration file: {config_path}
+
+[server]
+# Server URL (required)
+url = http://localhost:8080
+
+# Connection timeout in seconds
+timeout = 30
+
+# Retry attempts for failed requests
+retry_attempts = 3
+
+[client]
+# Endpoint name (defaults to hostname if not specified)
+endpoint_name = {default_endpoint_name}
+
+# Enable automatic synchronization
+auto_sync = false
+
+# Status update interval in seconds
+update_interval = 300
+
+[ui]
+# Show desktop notifications
+show_notifications = true
+
+# Minimize to system tray on startup
+minimize_to_tray = true
+
+[operations]
+# Confirm destructive operations
+confirm_destructive_operations = true
+
+[logging]
+# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+log_level = INFO
+""".format(
+                config_path=config_path,
+                default_endpoint_name=self._get_default_endpoint_name()
+            )
+            
+            with open(config_path, 'w') as f:
+                f.write(default_config)
+            
+            logger.info(f"Created default configuration file: {config_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to create default configuration: {e}")
+            raise
     
     def _load_configuration(self) -> None:
         """Load configuration from file and environment variables."""
@@ -270,6 +346,13 @@ class ClientConfiguration(IConfigurationManager):
     def save_configuration(self) -> None:
         """Save current configuration to file."""
         try:
+            # Check if current config file is writable
+            if not self._is_config_writable():
+                # If system config is not writable, save to user config
+                user_config_path = self._get_user_config_path()
+                logger.info(f"System config not writable, saving to user config: {user_config_path}")
+                self._config_file = user_config_path
+            
             config = ConfigParser()
             
             # Convert dictionary back to ConfigParser format
@@ -295,6 +378,24 @@ class ClientConfiguration(IConfigurationManager):
         except Exception as e:
             logger.error(f"Failed to save configuration: {e}")
             raise
+    
+    def _is_config_writable(self) -> bool:
+        """Check if the current configuration file is writable."""
+        try:
+            if os.path.exists(self._config_file):
+                return os.access(self._config_file, os.W_OK)
+            else:
+                # Check if parent directory is writable
+                parent_dir = Path(self._config_file).parent
+                return parent_dir.exists() and os.access(parent_dir, os.W_OK)
+        except Exception:
+            return False
+    
+    def _get_user_config_path(self) -> str:
+        """Get user-specific configuration file path."""
+        config_dir = Path.home() / '.pacsync'
+        config_dir.mkdir(parents=True, exist_ok=True)
+        return str(config_dir / 'client.conf')
     
     def get_all_config(self) -> Dict[str, Any]:
         """Get all configuration data."""

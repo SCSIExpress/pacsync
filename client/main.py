@@ -428,6 +428,9 @@ def run_gui_mode(args):
         # Initialize Qt application
         app = PacmanSyncApplication(sys.argv)
         
+        # Pass configuration to the Qt application
+        app.set_configuration(config)
+        
         # Check if system tray is available
         if not app.is_system_tray_available():
             logger.error("System tray is not available. Cannot run in GUI mode.")
@@ -509,11 +512,29 @@ def run_gui_mode(args):
             logger.debug("Periodic status update requested")
             sync_manager.force_status_update()
         
+        # Configuration change callback
+        def handle_config_changed(new_config: 'ClientConfiguration'):
+            """Handle configuration changes and update sync manager."""
+            logger.info("Configuration changed - updating sync manager")
+            try:
+                # Update sync manager with new configuration
+                if hasattr(sync_manager, 'update_configuration'):
+                    sync_manager.update_configuration(new_config)
+                else:
+                    logger.info("Sync manager doesn't support configuration updates - restart may be required for some changes")
+                
+                # Update status manager settings if needed
+                # (Most status manager settings are applied immediately)
+                
+            except Exception as e:
+                logger.error(f"Failed to apply configuration changes to sync manager: {e}")
+        
         # Register callbacks with Qt application
         app.set_sync_callback(handle_sync)
         app.set_set_latest_callback(handle_set_latest)
         app.set_revert_callback(handle_revert)
         app.set_status_update_callback(handle_status_update)
+        app.set_config_changed_callback(handle_config_changed)
         
         # Load initial status from persistence or set default
         persisted_status = status_manager.load_status()

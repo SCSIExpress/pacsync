@@ -686,6 +686,80 @@ class SyncManager(QObject):
         logger.info("Forcing status update")
         self._periodic_status_update()
     
+    def update_configuration(self, new_config: ClientConfiguration):
+        """Update configuration and apply changes to running components."""
+        logger.info("Updating sync manager configuration")
+        
+        try:
+            old_config = self.config
+            self.config = new_config
+            
+            # Update API client configuration
+            old_server_url = old_config.get_server_url()
+            new_server_url = new_config.get_server_url()
+            
+            if old_server_url != new_server_url:
+                logger.info(f"Server URL changed from {old_server_url} to {new_server_url}")
+                # Update API client server URL
+                self._api_client.server_url = new_server_url.rstrip('/')
+                
+                # Clear authentication since server changed
+                self._is_authenticated = False
+                self._endpoint_id = None
+                self.authentication_changed.emit(False)
+                
+                # Attempt to re-authenticate with new server
+                self._authenticate()
+            
+            # Update timeout settings
+            old_timeout = old_config.get_server_timeout()
+            new_timeout = new_config.get_server_timeout()
+            if old_timeout != new_timeout:
+                logger.info(f"Timeout changed from {old_timeout} to {new_timeout}")
+                # Update API client timeout
+                from aiohttp import ClientTimeout
+                self._api_client.timeout = ClientTimeout(total=new_timeout)
+            
+            # Update retry configuration
+            old_retry_attempts = old_config.get_retry_attempts()
+            new_retry_attempts = new_config.get_retry_attempts()
+            old_retry_delay = old_config.get_retry_delay()
+            new_retry_delay = new_config.get_retry_delay()
+            
+            if old_retry_attempts != new_retry_attempts or old_retry_delay != new_retry_delay:
+                logger.info(f"Retry config changed: attempts {old_retry_attempts}->{new_retry_attempts}, delay {old_retry_delay}->{new_retry_delay}")
+                retry_config = RetryConfig(
+                    max_retries=new_retry_attempts,
+                    base_delay=new_retry_delay,
+                    max_delay=60.0
+                )
+                self._api_client.retry_config = retry_config
+            
+            # Update status update interval
+            old_interval = old_config.get_update_interval()
+            new_interval = new_config.get_update_interval()
+            if old_interval != new_interval:
+                logger.info(f"Status update interval changed from {old_interval} to {new_interval} seconds")
+                self._status_timer.setInterval(new_interval * 1000)  # Convert to milliseconds
+            
+            # Update error handler settings
+            if hasattr(self._error_handler, 'set_show_technical_details'):
+                self._error_handler.set_show_technical_details(new_config.get_debug_mode())
+            
+            # Update logging if needed
+            if (old_config.get_debug_mode() != new_config.get_debug_mode() or
+                old_config.get_log_file() != new_config.get_log_file()):
+                logger.info("Logging configuration changed - updating logging setup")
+                self._setup_logging(new_config)
+            
+            logger.info("Configuration update completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to update configuration: {e}")
+            # Restore old configuration on failure
+            self.config = old_config
+            raise
+    
     def reconnect(self):
         """Force reconnection to server."""
         logger.info("Forcing reconnection")

@@ -1,0 +1,59 @@
+# Pacman Sync Utility Client Configuration
+# Simple user configuration file: ~/.pacsync/client.conf
+
+[server]
+# Server URL (required)
+url = http://localhost:8080
+
+# Connection timeout in seconds
+timeout = 30
+
+# Retry attempts for failed requests
+retry_attempts = 3
+
+[client]
+# Endpoint name (defaults to hostname if not specified)
+endpoint_name = 
+
+# Enable automatic synchronization
+auto_sync = false
+
+# Status update interval in seconds
+update_interval = 300
+
+# Note: Pool ID is assigned by the server after registration
+# and does not need to be configured here
+
+[ui]
+# Show desktop notifications
+show_notifications = true
+
+# Minimize to system tray on startup
+minimize_to_tray = true
+
+# Enable system tray integration
+enable_system_tray = true
+
+[operations]
+# Confirm destructive operations
+confirm_destructive_operations = true
+
+# Enable operation progress dialogs
+show_progress_dialogs = true
+
+[logging]
+# Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+log_level = INFO
+
+# Log file path (optional, logs to console if not specified)
+# log_file = ~/.pacsync/client.log
+
+[advanced]
+# Enable debug mode
+debug_mode = false
+
+# Cache directory
+cache_dir = ~/.pacsync/cache
+
+# Data directory
+data_dir = ~/.pacsync/data

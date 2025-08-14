@@ -239,12 +239,14 @@ class PacmanSyncApplication(QApplication):
         # Components
         self._status_indicator: Optional[SyncStatusIndicator] = None
         self._status_update_timer: Optional[QTimer] = None
+        self._config: Optional['ClientConfiguration'] = None
         
         # Callbacks for external integration
         self._sync_callback: Optional[Callable] = None
         self._set_latest_callback: Optional[Callable] = None
         self._revert_callback: Optional[Callable] = None
         self._status_update_callback: Optional[Callable] = None
+        self._config_changed_callback: Optional[Callable] = None
         
         self._initialize_application()
     
@@ -488,38 +490,52 @@ Use command-line options for operations: --sync, --set-latest, --revert, --statu
         
         try:
             from client.qt.windows import ConfigurationWindow
+            from client.config import ClientConfiguration
             
-            # Sample configuration (in real implementation, this would come from config file)
+            # Use stored configuration or load from file
+            config = self._config or ClientConfiguration()
+            all_config = config.get_all_config()
+            
+            # Convert configuration to format expected by ConfigurationWindow
             current_config = {
-                'server_url': 'http://localhost:8080',
-                'api_key': '',
-                'timeout': 30,
-                'retry_attempts': 3,
-                'verify_ssl': True,
-                'ssl_cert_path': '',
-                'endpoint_name': 'my-desktop',
-                'pool_id': 'default-pool',
-                'update_interval': 300,
-                'auto_register': True,
-                'log_level': 'INFO',
-                'log_file': '',
-                'auto_sync': False,
-                'sync_on_startup': False,
-                'confirm_operations': True,
-                'exclude_packages': ['linux', 'linux-headers'],
-                'conflict_resolution': 'manual',
-                'show_notifications': True,
-                'minimize_to_tray': True,
-                'start_minimized': False,
-                'theme': 'System Default',
-                'font_size': 10,
-                'enable_waybar': False,
-                'waybar_format': ''
+                # Server settings
+                'server_url': config.get_server_url(),
+                'api_key': config.get_api_key() or '',
+                'timeout': int(config.get_server_timeout()),  # Convert float to int
+                'retry_attempts': int(config.get_retry_attempts()),  # Ensure int
+                'verify_ssl': self._to_bool(all_config.get('server', {}).get('verify_ssl', True)),
+                'ssl_cert_path': all_config.get('server', {}).get('ssl_cert_path', ''),
+                
+                # Client settings
+                'endpoint_name': config.get_endpoint_name(),
+                'pool_id': config.get_pool_id() or '',  # Read-only, for display purposes
+                'update_interval': int(config.get_update_interval()),  # Convert to int
+                'auto_register': self._to_bool(all_config.get('client', {}).get('auto_register', True)),
+                'auto_sync': self._to_bool(config.is_auto_sync_enabled()),
+                'sync_on_startup': self._to_bool(all_config.get('client', {}).get('sync_on_startup', False)),
+                'confirm_operations': self._to_bool(all_config.get('operations', {}).get('confirm_destructive_operations', True)),
+                'exclude_packages': all_config.get('operations', {}).get('exclude_packages', []),
+                'conflict_resolution': all_config.get('operations', {}).get('conflict_resolution', 'manual'),
+                
+                # Logging settings
+                'log_level': config.get_log_level(),
+                'log_file': config.get_log_file() or '',
+                
+                # UI settings
+                'show_notifications': self._to_bool(config.should_show_notifications()),
+                'minimize_to_tray': self._to_bool(config.should_minimize_to_tray()),
+                'start_minimized': self._to_bool(all_config.get('ui', {}).get('start_minimized', False)),
+                'theme': all_config.get('ui', {}).get('theme', 'System Default'),
+                'font_size': int(all_config.get('ui', {}).get('font_size', 10)),  # Ensure int
+                
+                # WayBar settings
+                'enable_waybar': self._to_bool(all_config.get('waybar', {}).get('enabled', False)),
+                'waybar_format': all_config.get('waybar', {}).get('format', '')
             }
             
             # Show configuration window
             config_window = ConfigurationWindow(current_config)
-            config_window.settings_changed.connect(self._handle_settings_changed)
+            config_window.settings_changed.connect(lambda settings: self._handle_settings_changed(settings, config))
             config_window.exec()
             
         except ImportError as e:
@@ -530,12 +546,77 @@ Use command-line options for operations: --sync, --set-latest, --revert, --statu
                 "Configuration window is not available."
             )
     
-    def _handle_settings_changed(self, settings: dict) -> None:
+    def _handle_settings_changed(self, settings: dict, config: 'ClientConfiguration') -> None:
         """Handle configuration settings changes."""
         logger.info("Configuration settings changed")
-        # In a real implementation, this would save the settings to a config file
-        # and apply them to the running application
-        logger.debug(f"New settings: {settings}")
+        
+        try:
+            # Update configuration with new settings
+            # Server settings
+            config.set_config('server.url', settings.get('server_url', ''))
+            if settings.get('api_key'):
+                config.set_config('server.api_key', settings['api_key'])
+            config.set_config('server.timeout', settings.get('timeout', 30))
+            config.set_config('server.retry_attempts', settings.get('retry_attempts', 3))
+            config.set_config('server.verify_ssl', settings.get('verify_ssl', True))
+            if settings.get('ssl_cert_path'):
+                config.set_config('server.ssl_cert_path', settings['ssl_cert_path'])
+            
+            # Client settings
+            config.set_config('client.endpoint_name', settings.get('endpoint_name', ''))
+            # Note: pool_id is not saved from UI - it's managed by the server
+            config.set_config('client.update_interval', settings.get('update_interval', 300))
+            config.set_config('client.auto_register', settings.get('auto_register', True))
+            config.set_config('client.auto_sync', settings.get('auto_sync', False))
+            config.set_config('client.sync_on_startup', settings.get('sync_on_startup', False))
+            
+            # Operations settings
+            config.set_config('operations.confirm_destructive_operations', settings.get('confirm_operations', True))
+            config.set_config('operations.exclude_packages', settings.get('exclude_packages', []))
+            config.set_config('operations.conflict_resolution', settings.get('conflict_resolution', 'manual'))
+            
+            # Logging settings
+            config.set_config('logging.level', settings.get('log_level', 'INFO'))
+            if settings.get('log_file'):
+                config.set_config('logging.file', settings['log_file'])
+            
+            # UI settings
+            config.set_config('ui.show_notifications', settings.get('show_notifications', True))
+            config.set_config('ui.minimize_to_tray', settings.get('minimize_to_tray', True))
+            config.set_config('ui.start_minimized', settings.get('start_minimized', False))
+            config.set_config('ui.theme', settings.get('theme', 'System Default'))
+            config.set_config('ui.font_size', settings.get('font_size', 10))
+            
+            # WayBar settings
+            config.set_config('waybar.enabled', settings.get('enable_waybar', False))
+            config.set_config('waybar.format', settings.get('waybar_format', ''))
+            
+            # Save configuration to file
+            config.save_configuration()
+            
+            # Save configuration to file
+            config.save_configuration()
+            
+            # Reload and apply configuration changes immediately
+            self.reload_configuration()
+            
+            logger.info(f"Configuration saved and reloaded: {config.get_config_file_path()}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save configuration: {e}")
+            if self._status_indicator:
+                self._status_indicator.show_message(
+                    "Configuration Error",
+                    f"Failed to save settings: {str(e)}",
+                    QSystemTrayIcon.MessageIcon.Critical
+                )
+            else:
+                # Fallback error display
+                QMessageBox.critical(
+                    None,
+                    "Configuration Error",
+                    f"Failed to save configuration:\n{str(e)}"
+                )
     
     def _handle_quit_request(self) -> None:
         """Handle quit request from tray menu."""
@@ -565,6 +646,85 @@ Use command-line options for operations: --sync, --set-latest, --revert, --statu
     def set_status_update_callback(self, callback: Callable) -> None:
         """Set callback function for periodic status updates."""
         self._status_update_callback = callback
+    
+    def set_configuration(self, config: 'ClientConfiguration') -> None:
+        """Set the configuration object for the application."""
+        self._config = config
+    
+    def _to_bool(self, value) -> bool:
+        """Convert various value types to boolean."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in ('true', '1', 'yes', 'on')
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return bool(value)
+    
+    def reload_configuration(self) -> None:
+        """Reload configuration and apply changes to the running application."""
+        if not self._config:
+            logger.warning("No configuration object available for reload")
+            return
+        
+        try:
+            # Reload configuration from file
+            self._config.reload_configuration()
+            logger.info("Configuration reloaded from file")
+            
+            # Apply configuration changes to running components
+            self._apply_configuration_changes()
+            
+            # Show notification
+            if self._status_indicator:
+                self._status_indicator.show_message(
+                    "Configuration Reloaded",
+                    "Settings have been applied to the running application"
+                )
+            
+        except Exception as e:
+            logger.error(f"Failed to reload configuration: {e}")
+            if self._status_indicator:
+                self._status_indicator.show_message(
+                    "Configuration Error",
+                    f"Failed to reload configuration: {str(e)}",
+                    QSystemTrayIcon.MessageIcon.Critical
+                )
+    
+    def _apply_configuration_changes(self) -> None:
+        """Apply configuration changes to running application components."""
+        if not self._config:
+            return
+        
+        try:
+            # Update status update timer interval
+            if self._status_update_timer:
+                new_interval = self._config.get_update_interval() * 1000  # Convert to milliseconds
+                current_interval = self._status_update_timer.interval()
+                if new_interval != current_interval:
+                    self._status_update_timer.setInterval(new_interval)
+                    logger.info(f"Updated status update interval to {new_interval/1000} seconds")
+            
+            # Update notification settings (will apply to future notifications)
+            show_notifications = self._config.should_show_notifications()
+            logger.info(f"Notification setting updated: {show_notifications}")
+            
+            # Emit signal to notify other components of configuration changes
+            # This allows sync manager and other components to update their settings
+            if self._config_changed_callback:
+                logger.info("Notifying components of configuration changes")
+                self._config_changed_callback(self._config)
+            else:
+                logger.warning("No configuration change callback set")
+            
+            logger.info("Configuration changes applied to running application")
+            
+        except Exception as e:
+            logger.error(f"Failed to apply configuration changes: {e}")
+    
+    def set_config_changed_callback(self, callback: Callable) -> None:
+        """Set callback function for configuration changes."""
+        self._config_changed_callback = callback
     
     def update_sync_status(self, status: SyncStatus) -> None:
         """Update the sync status display."""

@@ -920,9 +920,10 @@ class ConfigurationWindow(QDialog):
         self.endpoint_name_edit.setPlaceholderText("my-desktop")
         endpoint_layout.addRow("Endpoint Name:", self.endpoint_name_edit)
         
-        self.pool_id_edit = QLineEdit()
-        self.pool_id_edit.setPlaceholderText("default-pool")
-        endpoint_layout.addRow("Pool ID:", self.pool_id_edit)
+        # Pool assignment info (read-only, assigned by server)
+        self.pool_info_label = QLabel("Assigned by server after registration")
+        self.pool_info_label.setStyleSheet("color: gray; font-style: italic;")
+        endpoint_layout.addRow("Pool Assignment:", self.pool_info_label)
         
         self.hostname_edit = QLineEdit()
         self.hostname_edit.setPlaceholderText("Auto-detected")
@@ -1092,7 +1093,15 @@ class ConfigurationWindow(QDialog):
         
         # Client settings
         self.endpoint_name_edit.setText(self.current_config.get('endpoint_name', ''))
-        self.pool_id_edit.setText(self.current_config.get('pool_id', ''))
+        
+        # Update pool info display
+        current_pool = self.current_config.get('pool_id', '')
+        if current_pool:
+            self.pool_info_label.setText(f"Currently assigned to: {current_pool}")
+            self.pool_info_label.setStyleSheet("color: green;")
+        else:
+            self.pool_info_label.setText("Not yet assigned - will be assigned after registration")
+            self.pool_info_label.setStyleSheet("color: gray; font-style: italic;")
         
         # Auto-detect hostname
         import socket
@@ -1143,7 +1152,7 @@ class ConfigurationWindow(QDialog):
         
         # Client settings
         settings['endpoint_name'] = self.endpoint_name_edit.text().strip()
-        settings['pool_id'] = self.pool_id_edit.text().strip()
+        # Note: pool_id is not collected from UI - it's assigned by server
         settings['update_interval'] = self.update_interval_spin.value()
         settings['auto_register'] = self.auto_register_check.isChecked()
         settings['log_level'] = self.log_level_combo.currentText()
@@ -1184,9 +1193,7 @@ class ConfigurationWindow(QDialog):
         if not settings['endpoint_name']:
             return False, "Endpoint name is required"
         
-        # Validate pool ID
-        if not settings['pool_id']:
-            return False, "Pool ID is required"
+        # Note: Pool ID validation removed - assigned by server
         
         # Validate timeout
         if settings['timeout'] < 5:
@@ -1231,7 +1238,9 @@ class ConfigurationWindow(QDialog):
         QMessageBox.information(
             self,
             "Settings Applied",
-            "Configuration settings have been applied successfully."
+            "Configuration settings have been applied and are now active.\n\n"
+            "Changes to server connection, update intervals, and notification "
+            "preferences take effect immediately."
         )
         
         logger.info("Configuration settings applied")
@@ -1272,7 +1281,7 @@ class ConfigurationWindow(QDialog):
                 'verify_ssl': True,
                 'ssl_cert_path': '',
                 'endpoint_name': 'my-desktop',
-                'pool_id': 'default-pool',
+                'pool_id': '',  # Assigned by server
                 'update_interval': 300,
                 'auto_register': True,
                 'log_level': 'INFO',

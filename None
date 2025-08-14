@@ -1,0 +1,40 @@
+2025-08-14 11:54:27 - client.sync_manager - INFO - Enhanced logging configured
+2025-08-14 11:54:27 - client.error_handling - INFO - Client error handler initialized
+2025-08-14 11:54:27 - client.error_handling - INFO - Error display mode set to: both
+2025-08-14 11:54:27 - client.status_persistence - INFO - Status persistence initialized: /home/coomer/.config/pacman-sync/status.json
+2025-08-14 11:54:28 - client.auth.token_storage - INFO - Token storage initialized (keyring: True)
+2025-08-14 11:54:28 - client.auth.token_manager - INFO - Token manager initialized
+2025-08-14 11:54:28 - client.api_client - INFO - API client initialized for server: http://test-refresh-server:9090
+2025-08-14 11:54:28 - client.pacman_interface - INFO - Retrieved configuration for 307 repository entries
+2025-08-14 11:54:28 - client.sync_manager - INFO - Sync manager initialized with enhanced error handling
+2025-08-14 11:54:28 - client.config - INFO - Configuration loaded from: /home/coomer/.pacsync/client.conf
+2025-08-14 11:54:28 - client.sync_manager - INFO - Updating sync manager configuration
+2025-08-14 11:54:28 - client.sync_manager - INFO - Server URL changed from http://test-refresh-server:9090 to http://updated-server:8888
+2025-08-14 11:54:28 - client.sync_manager - INFO - Attempting authentication: dev-client@DesktopTestMachine
+2025-08-14 11:54:28 - client.sync_manager - INFO - Status update interval changed from 600 to 900 seconds
+2025-08-14 11:54:28 - client.api_client - INFO - Authenticating endpoint: dev-client@DesktopTestMachine
+2025-08-14 11:54:28 - client.sync_manager - INFO - Configuration update completed successfully
+2025-08-14 11:54:28 - client.auth.token_manager - INFO - Authenticating endpoint: dev-client@DesktopTestMachine
+2025-08-14 11:54:28 - client.sync_manager - INFO - Stopping sync manager
+2025-08-14 11:54:31 - client.api_client - WARNING - Network error on attempt 1: Cannot connect to host test-refresh-server:9090 ssl:default [Name or service not known]
+2025-08-14 11:54:31 - client.api_client - INFO - Retrying in 0.7 seconds...
+2025-08-14 12:07:58 - client.sync_manager - INFO - Enhanced logging configured
+2025-08-14 12:07:58 - client.error_handling - INFO - Client error handler initialized
+2025-08-14 12:07:58 - client.error_handling - INFO - Error display mode set to: both
+2025-08-14 12:07:58 - client.status_persistence - INFO - Status persistence initialized: /home/coomer/.config/pacman-sync/status.json
+2025-08-14 12:07:58 - client.auth.token_storage - INFO - Token storage initialized (keyring: True)
+2025-08-14 12:07:58 - client.auth.token_manager - INFO - Token manager initialized
+2025-08-14 12:07:58 - client.api_client - INFO - API client initialized for server: http://localhost:4444
+2025-08-14 12:07:58 - client.pacman_interface - INFO - Retrieved configuration for 307 repository entries
+2025-08-14 12:07:58 - client.sync_manager - INFO - Sync manager initialized with enhanced error handling
+2025-08-14 12:07:58 - client.config - INFO - Configuration loaded from: /home/coomer/.pacsync/client.conf
+2025-08-14 12:07:58 - client.sync_manager - INFO - Updating sync manager configuration
+2025-08-14 12:07:58 - client.sync_manager - INFO - Server URL changed from http://localhost:4444 to http://updated-sync-server:7777
+2025-08-14 12:07:58 - client.sync_manager - INFO - Attempting authentication: test-endpoint@DesktopTestMachine
+2025-08-14 12:07:58 - client.sync_manager - INFO - Timeout changed from 30 to 90
+2025-08-14 12:07:58 - client.api_client - INFO - Authenticating endpoint: test-endpoint@DesktopTestMachine
+2025-08-14 12:07:58 - client.sync_manager - INFO - Configuration update completed successfully
+2025-08-14 12:07:58 - client.auth.token_manager - INFO - Authenticating endpoint: test-endpoint@DesktopTestMachine
+2025-08-14 12:07:58 - client.sync_manager - INFO - Stopping sync manager
+2025-08-14 12:08:02 - client.api_client - WARNING - Network error on attempt 1: Cannot connect to host updated-sync-server:7777 ssl:default [Name or service not known]
+2025-08-14 12:08:02 - client.api_client - INFO - Retrying in 1.0 seconds...
