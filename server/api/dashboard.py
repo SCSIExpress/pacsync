@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from server.core.pool_manager import PackagePoolManager
 from server.core.sync_coordinator import SyncCoordinator
 from server.database.orm import EndpointRepository, RepositoryRepository, PackageStateRepository
-from server.database.connection import get_database_manager
+from server.database.connection import get_database_manager, DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +64,16 @@ async def get_sync_coordinator(request: Request) -> SyncCoordinator:
     return request.app.state.sync_coordinator
 
 
+async def get_db_manager(request: Request) -> DatabaseManager:
+    """Get database manager from app state."""
+    return request.app.state.db_manager
+
+
 @router.get("/metrics")
 async def get_dashboard_metrics(
     pool_manager: PackagePoolManager = Depends(get_pool_manager),
-    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator)
+    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator),
+    db_manager: DatabaseManager = Depends(get_db_manager)
 ) -> DashboardMetrics:
     """
     Get comprehensive dashboard metrics.
@@ -139,9 +145,9 @@ async def get_dashboard_metrics(
         endpoints_unassigned = len([e for e in all_endpoints if e.pool_id is None])
         
         # Get repository statistics
-        total_repositories = await get_total_repositories()
-        total_packages_available = await get_total_packages_available()
-        total_packages_in_target_states = await get_total_packages_in_target_states()
+        total_repositories = await get_total_repositories(db_manager)
+        total_packages_available = await get_total_packages_available(db_manager)
+        total_packages_in_target_states = await get_total_packages_in_target_states(db_manager)
         
         return DashboardMetrics(
             server_uptime_seconds=uptime_seconds,
@@ -252,7 +258,8 @@ async def get_pool_statuses(
 @router.get("/system-stats")
 async def get_system_stats(
     pool_manager: PackagePoolManager = Depends(get_pool_manager),
-    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator)
+    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator),
+    db_manager: DatabaseManager = Depends(get_db_manager)
 ) -> SystemStats:
     """
     Get system statistics for dashboard.
@@ -263,11 +270,10 @@ async def get_system_stats(
         logger.info("Getting system statistics")
         
         # Get database type
-        db_manager = get_database_manager()
         database_type = db_manager.database_type
         
         # Get sync operation statistics (simplified for now)
-        total_sync_operations = await get_total_sync_operations()
+        total_sync_operations = await get_total_sync_operations(db_manager)
         successful_syncs_24h = 0  # TODO: Implement when we have operation history
         failed_syncs_24h = 0     # TODO: Implement when we have operation history
         
@@ -309,10 +315,9 @@ def format_uptime(uptime_delta: timedelta) -> str:
         return f"{seconds}s"
 
 
-async def get_total_repositories() -> int:
+async def get_total_repositories(db_manager: DatabaseManager) -> int:
     """Get total number of repositories across all endpoints."""
     try:
-        db_manager = get_database_manager()
         query = "SELECT COUNT(DISTINCT repo_name) FROM repositories"
         result = await db_manager.fetchval(query)
         return result if result else 0
@@ -321,10 +326,9 @@ async def get_total_repositories() -> int:
         return 0
 
 
-async def get_total_packages_available() -> int:
+async def get_total_packages_available(db_manager: DatabaseManager) -> int:
     """Get total number of packages available across all repositories."""
     try:
-        db_manager = get_database_manager()
         # Count packages in repositories (JSON array length)
         query = """
         SELECT SUM(
@@ -342,10 +346,9 @@ async def get_total_packages_available() -> int:
         return 0
 
 
-async def get_total_packages_in_target_states() -> int:
+async def get_total_packages_in_target_states(db_manager: DatabaseManager) -> int:
     """Get total number of packages in target states across all pools."""
     try:
-        db_manager = get_database_manager()
         # Count packages in target states
         query = """
         SELECT SUM(
@@ -363,10 +366,9 @@ async def get_total_packages_in_target_states() -> int:
         return 0
 
 
-async def get_total_sync_operations() -> int:
+async def get_total_sync_operations(db_manager: DatabaseManager) -> int:
     """Get total number of sync operations."""
     try:
-        db_manager = get_database_manager()
         query = "SELECT COUNT(*) FROM sync_operations"
         result = await db_manager.fetchval(query)
         return result if result else 0

@@ -97,10 +97,7 @@ class DatabaseManager:
         self.database_url = str(db_path)
         
         try:
-            # Test connection
-            self._connection = await aiosqlite.connect(self.database_url)
-            await self._connection.execute("PRAGMA foreign_keys = ON")
-            await self._connection.commit()
+            # Don't create a persistent connection here, create it per request
             logger.info(f"SQLite database initialized: {self.database_url}")
         except Exception as e:
             logger.error(f"Failed to initialize SQLite: {e}")
@@ -113,10 +110,13 @@ class DatabaseManager:
             async with self._pool.acquire() as conn:
                 yield conn
         elif self.database_type == "internal":
-            if self._connection is None:
-                self._connection = await aiosqlite.connect(self.database_url)
-                await self._connection.execute("PRAGMA foreign_keys = ON")
-            yield self._connection
+            # Create a new connection for each request to avoid connection issues
+            conn = await aiosqlite.connect(self.database_url)
+            try:
+                await conn.execute("PRAGMA foreign_keys = ON")
+                yield conn
+            finally:
+                await conn.close()
         else:
             raise ValueError(f"Unsupported database type: {self.database_type}")
     
