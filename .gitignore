@@ -85,3 +85,4 @@ simple_web/
 .coverage.*
 .mypy_cache/
 .tox/
+tests/
