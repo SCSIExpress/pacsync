@@ -211,7 +211,7 @@ generate_usage_examples() {
     cat << EOF
 Pull and run production image:
   docker pull ${PROD_TAGS[0]}
-  docker run -d --name pacman-sync-server -p 8080:8080 \\
+  docker run -d --name pacman-sync-server -p 4444:4444 \\
     -e DATABASE_TYPE=internal \\
     -e JWT_SECRET_KEY="\$(openssl rand -hex 32)" \\
     -v pacman-sync-data:/app/data \\
@@ -219,7 +219,7 @@ Pull and run production image:
 
 Pull and run development image:
   docker pull ${DEV_TAGS[0]}
-  docker run -d --name pacman-sync-dev -p 8080:8080 \\
+  docker run -d --name pacman-sync-dev -p 4444:4444 \\
     -e DATABASE_TYPE=internal \\
     -e JWT_SECRET_KEY=dev-key \\
     -v \$(pwd)/server:/app/server \\
@@ -230,7 +230,7 @@ Use in Docker Compose:
     pacman-sync-server:
       image: ${PROD_TAGS[0]}
       ports:
-        - "8080:8080"
+        - "4444:4444"
       environment:
         DATABASE_TYPE: internal
         JWT_SECRET_KEY: your-secret-key

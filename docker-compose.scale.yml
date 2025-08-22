@@ -41,7 +41,7 @@ services:
     image: haproxy:2.8-alpine
     container_name: pacman-sync-haproxy
     ports:
-      - "8080:8080"
+      - "4444:4444"
       - "8404:8404"  # Stats interface
       - "8405:8405"  # Monitoring interface
     volumes:
