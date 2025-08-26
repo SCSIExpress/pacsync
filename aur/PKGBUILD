@@ -16,6 +16,11 @@ source=("$pkgbase-$pkgver.tar.gz::https://github.com/user/pacman-sync-utility/ar
         "pacman-sync-utility.desktop"
         "pacman-sync-utility.sysusers"
         "pacman-sync-utility.tmpfiles"
+        "client.conf"
+        "server.conf"
+        "pools.conf"
+        "validate-config-installation.py"
+        "config-backup-restore.sh"
         "icons/pacman-sync-utility.svg"
         "icons/16x16/pacman-sync-utility.png"
         "icons/32x32/pacman-sync-utility.png"
@@ -29,6 +34,11 @@ sha256sums=('SKIP'  # Will be updated with actual source checksum
             'SKIP'  # pacman-sync-utility.desktop
             'SKIP'  # pacman-sync-utility.sysusers
             'SKIP'  # pacman-sync-utility.tmpfiles
+            'SKIP'  # client.conf
+            'SKIP'  # server.conf
+            'SKIP'  # pools.conf
+            'SKIP'  # validate-config-installation.py
+            'SKIP'  # config-backup-restore.sh
             'SKIP'  # icons/pacman-sync-utility.svg
             'SKIP'  # icons/16x16/pacman-sync-utility.png
             'SKIP'  # icons/32x32/pacman-sync-utility.png
@@ -40,107 +50,648 @@ sha256sums=('SKIP'  # Will be updated with actual source checksum
 prepare() {
     cd "$srcdir/$pkgbase-$pkgver"
     
-    # Create build directory structure
-    mkdir -p build
+    # Create comprehensive build directory structure
+    mkdir -p build/{venv,deps,temp,logs}
+    mkdir -p build/packaging/{client,server,common}
+    
+    # Apply any necessary patches (placeholder for future patches)
+    # Example: patch -p1 < "$srcdir/fix-something.patch"
     
     # Prepare Python virtual environment for dependency isolation
+    msg2 "Setting up Python virtual environment for build isolation..."
     python -m venv build/venv
     source build/venv/bin/activate
     
-    # Upgrade pip and install build dependencies
-    pip install --upgrade pip setuptools wheel
+    # Upgrade pip and install essential build dependencies
+    msg2 "Installing build dependencies in virtual environment..."
+    pip install --upgrade pip setuptools wheel build
+    
+    # Install development dependencies for testing and building
+    if [ -f requirements.txt ]; then
+        msg2 "Installing runtime dependencies..."
+        pip install -r requirements.txt
+    fi
+    
+    if [ -f server-requirements.txt ]; then
+        msg2 "Installing server dependencies..."
+        pip install -r server-requirements.txt
+    fi
+    
+    # Install test dependencies if check() will be run
+    if [ -f requirements-dev.txt ]; then
+        msg2 "Installing development dependencies..."
+        pip install -r requirements-dev.txt
+    fi
+    
+    # Validate source structure and required files
+    msg2 "Validating source structure..."
+    local required_files=("client" "server" "shared" "requirements.txt" "server-requirements.txt")
+    local missing_files=()
+    
+    for file in "${required_files[@]}"; do
+        if [ ! -e "$file" ]; then
+            missing_files+=("$file")
+        fi
+    done
+    
+    if [ ${#missing_files[@]} -gt 0 ]; then
+        error "Missing required source files: ${missing_files[*]}"
+        return 1
+    fi
+    
+    # Prepare configuration files with proper substitutions
+    msg2 "Preparing configuration templates..."
+    if [ -f config/client.conf.template ]; then
+        sed 's|@PREFIX@|/usr|g; s|@SYSCONFDIR@|/etc|g; s|@LOCALSTATEDIR@|/var|g' \
+            config/client.conf.template > build/temp/client.conf.prepared
+    fi
+    
+    if [ -f config/server.conf.template ]; then
+        sed 's|@PREFIX@|/usr|g; s|@SYSCONFDIR@|/etc|g; s|@LOCALSTATEDIR@|/var|g' \
+            config/server.conf.template > build/temp/server.conf.prepared
+    fi
+    
+    # Validate Python syntax of all Python files
+    msg2 "Validating Python syntax..."
+    find . -name "*.py" -type f -exec python -m py_compile {} \; || {
+        error "Python syntax validation failed"
+        return 1
+    }
+    
+    # Create file organization for packaging
+    msg2 "Organizing files for packaging..."
+    
+    # Organize client files
+    mkdir -p build/packaging/client/{bin,lib,share}
+    
+    # Organize server files  
+    mkdir -p build/packaging/server/{bin,lib,systemd}
+    
+    # Organize common files
+    mkdir -p build/packaging/common/{etc,share/doc,share/licenses}
+    
+    # Log preparation completion
+    echo "Source preparation completed at $(date)" > build/logs/prepare.log
+    echo "Virtual environment: $(which python)" >> build/logs/prepare.log
+    echo "Python version: $(python --version)" >> build/logs/prepare.log
+    echo "Pip version: $(pip --version)" >> build/logs/prepare.log
+    
+    msg2 "Source preparation completed successfully"
 }
 
 build() {
     cd "$srcdir/$pkgbase-$pkgver"
     
-    # Activate virtual environment
+    # Activate virtual environment prepared in prepare()
     source build/venv/bin/activate
     
+    msg2 "Building Python package with pip and setuptools..."
+    
+    # Create isolated build directories for dependencies
+    mkdir -p "$srcdir/python-deps"
+    mkdir -p build/wheels
+    mkdir -p build/installed
+    
     # Install Python dependencies to temporary build location
-    pip install --target="$srcdir/python-deps" -r requirements.txt
-    pip install --target="$srcdir/python-deps" -r server-requirements.txt
+    msg2 "Installing runtime dependencies to build location..."
+    pip install --no-deps --target="$srcdir/python-deps" -r requirements.txt || {
+        error "Failed to install client dependencies"
+        return 1
+    }
     
-    # Build Python package
-    python setup.py build
+    msg2 "Installing server dependencies to build location..."
+    pip install --no-deps --target="$srcdir/python-deps" -r server-requirements.txt || {
+        error "Failed to install server dependencies"
+        return 1
+    }
     
-    # Build any C++ components if CMakeLists.txt exists
-    if [ -f CMakeLists.txt ]; then
-        cd build
-        cmake .. -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release
-        make
-        cd ..
+    # Build Python package using modern build system with setuptools
+    if [ -f pyproject.toml ]; then
+        msg2 "Building with pyproject.toml using modern build backend..."
+        python -m build --wheel --outdir build/wheels || {
+            error "Failed to build wheel with pyproject.toml"
+            return 1
+        }
+    elif [ -f setup.py ]; then
+        msg2 "Building with setup.py using setuptools..."
+        # Build in-place first
+        python setup.py build --build-base=build/python || {
+            error "Failed to build with setup.py"
+            return 1
+        }
+        # Create wheel distribution
+        python setup.py bdist_wheel --dist-dir=build/wheels || {
+            error "Failed to create wheel distribution"
+            return 1
+        }
+    else
+        msg2 "No standard build configuration found, creating package structure manually..."
+        # Create a basic package structure for manual installation
+        mkdir -p build/python/lib/python$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages/pacman_sync_utility
+        
+        # Copy source modules to build location
+        cp -r client build/python/lib/python*/site-packages/pacman_sync_utility/ || {
+            error "Failed to copy client module"
+            return 1
+        }
+        cp -r server build/python/lib/python*/site-packages/pacman_sync_utility/ || {
+            error "Failed to copy server module"
+            return 1
+        }
+        cp -r shared build/python/lib/python*/site-packages/pacman_sync_utility/ || {
+            error "Failed to copy shared module"
+            return 1
+        }
+        
+        # Create __init__.py files for proper Python package structure
+        touch build/python/lib/python*/site-packages/pacman_sync_utility/__init__.py
+        
+        msg2 "Manual package structure created successfully"
     fi
+    
+    # Install the built package to temporary location for packaging
+    msg2 "Installing built package to temporary location..."
+    if [ -f build/wheels/*.whl ]; then
+        pip install --no-deps --target=build/installed build/wheels/*.whl || {
+            error "Failed to install built wheel"
+            return 1
+        }
+    elif [ -f setup.py ]; then
+        python setup.py install --root=build/installed --prefix=/usr --optimize=1 --skip-build || {
+            error "Failed to install with setup.py"
+            return 1
+        }
+    fi
+    
+    # Build any C++ components if CMakeLists.txt exists and has actual targets
+    if [ -f CMakeLists.txt ]; then
+        msg2 "Checking for C++ components to build..."
+        
+        # Check if CMakeLists.txt has actual executable targets (not just custom targets)
+        if grep -q "add_executable\|add_library" CMakeLists.txt && ! grep -q "^#.*add_executable\|^#.*add_library" CMakeLists.txt; then
+            msg2 "Building C++ components with CMake..."
+            
+            # Create build directory for CMake
+            mkdir -p build/cmake
+            cd build/cmake
+            
+            # Configure with CMake
+            cmake ../.. \
+                -DCMAKE_INSTALL_PREFIX=/usr \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_CXX_STANDARD=17 \
+                -DQt6_DIR=/usr/lib/cmake/Qt6 || {
+                error "CMake configuration failed"
+                return 1
+            }
+            
+            # Build with make using all available cores
+            make -j$(nproc) || {
+                error "C++ compilation failed"
+                return 1
+            }
+            
+            # Install to temporary location
+            make DESTDIR="$srcdir/cpp-install" install || {
+                error "C++ installation to temporary location failed"
+                return 1
+            }
+            
+            cd ../..
+            msg2 "C++ components built successfully"
+        else
+            msg2 "CMakeLists.txt found but no actual build targets detected, skipping C++ build"
+        fi
+    else
+        msg2 "No CMakeLists.txt found, skipping C++ component build"
+    fi
+    
+    # Validate build artifacts
+    msg2 "Validating build artifacts..."
+    
+    # Check Python package installation
+    if [ -d build/installed ]; then
+        msg2 "✓ Python package installation directory created"
+    else
+        warning "Python package installation directory not found"
+    fi
+    
+    # Check dependency installation
+    if [ -d "$srcdir/python-deps" ] && [ "$(ls -A "$srcdir/python-deps")" ]; then
+        msg2 "✓ Python dependencies installed to build location"
+        echo "Installed dependencies:" >> build/logs/prepare.log
+        ls -la "$srcdir/python-deps" >> build/logs/prepare.log
+    else
+        warning "Python dependencies directory is empty or missing"
+    fi
+    
+    # Check for wheel files if modern build was used
+    if [ -d build/wheels ] && [ "$(ls -A build/wheels)" ]; then
+        msg2 "✓ Wheel files created successfully"
+        echo "Created wheels:" >> build/logs/prepare.log
+        ls -la build/wheels/ >> build/logs/prepare.log
+    fi
+    
+    # Check C++ artifacts if applicable
+    if [ -d "$srcdir/cpp-install" ]; then
+        msg2 "✓ C++ components installed to temporary location"
+        echo "C++ installation contents:" >> build/logs/prepare.log
+        find "$srcdir/cpp-install" -type f >> build/logs/prepare.log
+    fi
+    
+    # Create build summary
+    {
+        echo "Build completed at $(date)"
+        echo "Build method: $([ -f pyproject.toml ] && echo 'pyproject.toml' || ([ -f setup.py ] && echo 'setup.py' || echo 'manual'))"
+        echo "Python version: $(python --version)"
+        echo "Pip version: $(pip --version)"
+        echo "Build artifacts:"
+        find build -name "*.whl" -o -name "*.tar.gz" -o -name "*.so" -o -type f -path "*/bin/*" 2>/dev/null || true
+        echo "Dependencies installed: $(ls "$srcdir/python-deps" | wc -l) packages"
+        if [ -f CMakeLists.txt ]; then
+            echo "CMake build: $([ -d build/cmake ] && echo 'completed' || echo 'skipped (no targets)')"
+        fi
+    } >> build/logs/prepare.log
+    
+    msg2 "Build completed successfully"
 }
 
 check() {
     cd "$srcdir/$pkgbase-$pkgver"
     
-    # Activate virtual environment
+    # Activate virtual environment prepared in prepare()
     source build/venv/bin/activate
     
-    # Set PYTHONPATH to include built dependencies
-    export PYTHONPATH="$srcdir/python-deps:$PYTHONPATH"
+    # Set PYTHONPATH to include built dependencies and source
+    export PYTHONPATH="$srcdir/python-deps:$PWD:$PYTHONPATH"
     
-    # Run unit tests
-    python -m pytest tests/ -v --tb=short || echo "Tests failed but continuing build"
+    msg2 "Running test suite..."
     
-    # Basic import validation
-    python -c "import sys; sys.path.insert(0, '.'); import client; import server; import shared" || echo "Import validation failed"
+    # Run unit tests if pytest is available and tests directory exists
+    if command -v pytest >/dev/null 2>&1 && [ -d tests ]; then
+        python -m pytest tests/ -v --tb=short --maxfail=5 || {
+            warning "Some tests failed but continuing build"
+            echo "Test failures logged at $(date)" >> build/logs/prepare.log
+        }
+    else
+        msg2 "Pytest not available or no tests directory found, skipping unit tests"
+    fi
+    
+    # Basic import validation for all main modules
+    msg2 "Validating module imports..."
+    python -c "
+import sys
+sys.path.insert(0, '.')
+try:
+    import client
+    print('✓ Client module imported successfully')
+except ImportError as e:
+    print(f'✗ Client module import failed: {e}')
+    sys.exit(1)
+
+try:
+    import server  
+    print('✓ Server module imported successfully')
+except ImportError as e:
+    print(f'✗ Server module import failed: {e}')
+    sys.exit(1)
+
+try:
+    import shared
+    print('✓ Shared module imported successfully') 
+except ImportError as e:
+    print(f'✗ Shared module import failed: {e}')
+    sys.exit(1)
+
+print('All module imports successful')
+" || {
+        error "Module import validation failed"
+        return 1
+    }
+    
+    # Test basic functionality if possible
+    msg2 "Testing basic functionality..."
+    python -c "
+import sys
+sys.path.insert(0, '.')
+try:
+    from client.config import ClientConfig
+    from server.config import ServerConfig
+    print('✓ Configuration classes loaded successfully')
+except Exception as e:
+    print(f'Configuration test failed: {e}')
+" || warning "Basic functionality test failed"
+    
+    # Log check completion
+    echo "Check phase completed at $(date)" >> build/logs/prepare.log
+    
+    msg2 "Check phase completed"
 }
 
 # Helper function to install common files
 _install_common_files() {
-    # Install Python package
     cd "$srcdir/$pkgbase-$pkgver"
-    python setup.py install --root="$pkgdir" --optimize=1 --skip-build
     
-    # Install shared Python dependencies
-    cp -r "$srcdir/python-deps"/* "$pkgdir/usr/lib/python$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages/"
+    msg2 "Installing Python package and dependencies..."
     
-    # Install shared configuration directory
-    install -Dm644 config/client.conf.template "$pkgdir/etc/$pkgbase/client.conf"
-    install -Dm644 config/server.conf.template "$pkgdir/etc/$pkgbase/server.conf"
+    # Install Python package using the appropriate method
+    local python_version=$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    local site_packages="$pkgdir/usr/lib/python${python_version}/site-packages"
     
-    # Install documentation
+    # Install the main Python package
+    if [ -f pyproject.toml ] && [ -d build/wheels ] && [ "$(ls -A build/wheels)" ]; then
+        # Install from wheel if available
+        msg2 "Installing from wheel distribution..."
+        python -m pip install --no-deps --target="$site_packages" build/wheels/*.whl
+    elif [ -f setup.py ]; then
+        # Install using setup.py
+        msg2 "Installing using setup.py..."
+        python setup.py install --root="$pkgdir" --prefix=/usr --optimize=1 --skip-build
+    elif [ -d build/installed ]; then
+        # Copy from build/installed if available
+        msg2 "Installing from build directory..."
+        cp -r build/installed/usr/* "$pkgdir/usr/"
+    else
+        # Manual installation as fallback
+        msg2 "Performing manual installation..."
+        install -dm755 "$site_packages/pacman_sync_utility"
+        cp -r client "$site_packages/pacman_sync_utility/"
+        cp -r server "$site_packages/pacman_sync_utility/"
+        cp -r shared "$site_packages/pacman_sync_utility/"
+        touch "$site_packages/pacman_sync_utility/__init__.py"
+    fi
+    
+    # Install shared Python dependencies to site-packages
+    if [ -d "$srcdir/python-deps" ] && [ "$(ls -A "$srcdir/python-deps")" ]; then
+        msg2 "Installing Python dependencies..."
+        cp -r "$srcdir/python-deps"/* "$site_packages/"
+    fi
+    
+    # Install C++ components if they were built
+    if [ -d "$srcdir/cpp-install" ]; then
+        msg2 "Installing C++ components..."
+        cp -r "$srcdir/cpp-install"/* "$pkgdir/"
+    fi
+    
+    msg2 "Creating configuration directory structure..."
+    
+    # Create configuration directory structure with proper permissions
+    install -dm755 "$pkgdir/etc/$pkgbase"
+    install -dm755 "$pkgdir/etc/$pkgbase/conf.d"
+    install -dm755 "$pkgdir/etc/$pkgbase/ssl"
+    
+    # Install main configuration files with proper permissions
+    # These files will be managed by pacman's backup system
+    install -Dm644 "$srcdir/client.conf" "$pkgdir/etc/$pkgbase/client.conf"
+    install -Dm644 "$srcdir/server.conf" "$pkgdir/etc/$pkgbase/server.conf"
+    install -Dm644 "$srcdir/pools.conf" "$pkgdir/etc/$pkgbase/pools.conf"
+    
+    # Create additional configuration directories for modular configuration
+    install -dm755 "$pkgdir/etc/$pkgbase/pools.d"
+    install -dm755 "$pkgdir/etc/$pkgbase/endpoints.d"
+    
+    msg2 "Installing configuration templates and examples..."
+    
+    # Install configuration templates for reference
+    install -dm755 "$pkgdir/usr/share/doc/$pkgbase/examples"
+    if [ -f config/client.conf.template ]; then
+        install -Dm644 config/client.conf.template "$pkgdir/usr/share/doc/$pkgbase/examples/client.conf.template"
+    fi
+    if [ -f config/server.conf.template ]; then
+        install -Dm644 config/server.conf.template "$pkgdir/usr/share/doc/$pkgbase/examples/server.conf.template"
+    fi
+    if [ -f config/client.conf.simple ]; then
+        install -Dm644 config/client.conf.simple "$pkgdir/usr/share/doc/$pkgbase/examples/client.conf.simple"
+    fi
+    
+    # Install Waybar integration examples
+    if [ -f docs/waybar_config_example.json ]; then
+        install -Dm644 docs/waybar_config_example.json "$pkgdir/usr/share/doc/$pkgbase/examples/waybar_config_example.json"
+    fi
+    if [ -f docs/waybar_style_example.css ]; then
+        install -Dm644 docs/waybar_style_example.css "$pkgdir/usr/share/doc/$pkgbase/examples/waybar_style_example.css"
+    fi
+    
+    msg2 "Installing core documentation..."
+    
+    # Install core documentation with proper permissions
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgbase/README.md"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgbase/LICENSE"
     
-    # Install project structure documentation
-    install -Dm644 PROJECT_STRUCTURE.md "$pkgdir/usr/share/doc/$pkgbase/PROJECT_STRUCTURE.md"
+    # Install project documentation
+    if [ -f PROJECT_STRUCTURE.md ]; then
+        install -Dm644 PROJECT_STRUCTURE.md "$pkgdir/usr/share/doc/$pkgbase/PROJECT_STRUCTURE.md"
+    fi
     
-    # Install example configurations
-    install -Dm644 docs/waybar_config_example.json "$pkgdir/usr/share/doc/$pkgbase/examples/waybar_config_example.json"
-    install -Dm644 docs/waybar_style_example.css "$pkgdir/usr/share/doc/$pkgbase/examples/waybar_style_example.css"
+    # Install docs directory contents
+    if [ -d docs ]; then
+        install -dm755 "$pkgdir/usr/share/doc/$pkgbase/docs"
+        find docs -name "*.md" -type f | while read -r doc; do
+            install -Dm644 "$doc" "$pkgdir/usr/share/doc/$pkgbase/$doc"
+        done
+    fi
+    
+    msg2 "Installing configuration management utilities..."
+    
+    # Install configuration management utilities with proper permissions
+    install -Dm755 "$srcdir/validate-config-installation.py" "$pkgdir/usr/bin/pacman-sync-validate-config"
+    install -Dm755 "$srcdir/config-backup-restore.sh" "$pkgdir/usr/bin/pacman-sync-config-backup"
+    
+    # Create symbolic links for common operations
+    ln -sf pacman-sync-validate-config "$pkgdir/usr/bin/pacman-sync-check-config"
+    ln -sf pacman-sync-config-backup "$pkgdir/usr/bin/pacman-sync-backup-config"
+    ln -sf pacman-sync-config-backup "$pkgdir/usr/bin/pacman-sync-restore-config"
+    
+    msg2 "Setting up shared directories and permissions..."
+    
+    # Create shared data directories (actual ownership will be set by tmpfiles.d and post-install)
+    install -dm755 "$pkgdir/usr/share/$pkgbase"
+    install -dm755 "$pkgdir/usr/share/$pkgbase/templates"
+    install -dm755 "$pkgdir/usr/share/$pkgbase/migrations"
+    
+    # Install database migration scripts if they exist
+    if [ -d server/database/migrations ]; then
+        cp -r server/database/migrations/* "$pkgdir/usr/share/$pkgbase/migrations/"
+        find "$pkgdir/usr/share/$pkgbase/migrations" -type f -exec chmod 644 {} \;
+    fi
+    
+    # Install shared templates
+    if [ -d templates ]; then
+        cp -r templates/* "$pkgdir/usr/share/$pkgbase/templates/"
+        find "$pkgdir/usr/share/$pkgbase/templates" -type f -exec chmod 644 {} \;
+    fi
+    
+    # Set proper permissions for all common files
+    msg2 "Setting proper file permissions for common files..."
+    
+    # Configuration files - readable by all, writable by root only
+    find "$pkgdir/etc/$pkgbase" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    find "$pkgdir/etc/$pkgbase" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    
+    # Documentation files - readable by all
+    find "$pkgdir/usr/share/doc/$pkgbase" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    find "$pkgdir/usr/share/doc/$pkgbase" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    
+    # License files - readable by all
+    find "$pkgdir/usr/share/licenses/$pkgbase" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    
+    # Utility scripts - executable by all
+    find "$pkgdir/usr/bin" -name "pacman-sync-*" -type f -exec chmod 755 {} \; 2>/dev/null || true
+    
+    # Python package files - proper Python permissions
+    find "$site_packages" -type f -name "*.py" -exec chmod 644 {} \; 2>/dev/null || true
+    find "$site_packages" -type f -name "*.pyc" -exec chmod 644 {} \; 2>/dev/null || true
+    find "$site_packages" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    
+    # Shared data files - readable by all
+    find "$pkgdir/usr/share/$pkgbase" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    find "$pkgdir/usr/share/$pkgbase" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    
+    msg2 "Common files installation completed"
 }
 
 # Helper function to install client-specific files
 _install_client_files() {
-    # Install client executable script
+    msg2 "Installing client executable scripts..."
+    
+    # Install client executable script with enhanced functionality
     install -Dm755 /dev/stdin "$pkgdir/usr/bin/pacman-sync-client" << 'EOF'
 #!/bin/bash
-exec python -m client.main "$@"
+# Pacman Sync Utility Client Launcher
+# Supports both GUI and CLI modes with proper environment setup
+
+# Set up environment
+export PYTHONPATH="/usr/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages:$PYTHONPATH"
+
+# Check for configuration directory and create if needed
+if [ ! -d "$HOME/.config/pacman-sync-utility" ]; then
+    mkdir -p "$HOME/.config/pacman-sync-utility"
+fi
+
+# Execute the client with all arguments passed through
+exec python3 -m client.main "$@"
 EOF
     
-    # Install CLI utility script
+    # Install CLI utility script with enhanced argument handling
     install -Dm755 /dev/stdin "$pkgdir/usr/bin/pacman-sync-cli" << 'EOF'
 #!/bin/bash
-exec python -m client.main --cli "$@"
+# Pacman Sync Utility CLI Interface
+# Provides command-line access to client functionality
+
+# Set up environment
+export PYTHONPATH="/usr/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages:$PYTHONPATH"
+
+# Execute the client in CLI mode
+exec python3 -m client.main --cli "$@"
 EOF
     
-    # Install systemd user service
+    # Install system tray launcher script
+    install -Dm755 /dev/stdin "$pkgdir/usr/bin/pacman-sync-client-tray" << 'EOF'
+#!/bin/bash
+# Pacman Sync Utility System Tray Launcher
+# Starts the client in system tray mode
+
+# Set up environment
+export PYTHONPATH="/usr/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages:$PYTHONPATH"
+
+# Check if display is available
+if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+    echo "Error: No display available for system tray mode" >&2
+    exit 1
+fi
+
+# Execute the client in tray mode
+exec python3 -m client.main --tray "$@"
+EOF
+    
+    msg2 "Installing systemd user service files..."
+    
+    # Install systemd user service for regular client operation
     install -Dm644 "$srcdir/pacman-sync-client.service" "$pkgdir/usr/lib/systemd/user/pacman-sync-client.service"
     
-    # Install desktop entry
+    # Install systemd user service for tray mode
+    install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/user/pacman-sync-client-tray.service" << 'EOF'
+[Unit]
+Description=Pacman Sync Utility Client (System Tray)
+After=graphical-session.target
+Wants=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/pacman-sync-client-tray
+Restart=on-failure
+RestartSec=5
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=default.target
+EOF
+    
+    msg2 "Installing desktop integration files..."
+    
+    # Install main desktop entry
     install -Dm644 "$srcdir/pacman-sync-utility.desktop" "$pkgdir/usr/share/applications/pacman-sync-utility.desktop"
     
-    # Install application icons
+    # Install tray-specific desktop entry
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/pacman-sync-utility-tray.desktop" << 'EOF'
+[Desktop Entry]
+Name=Pacman Sync Utility (Tray)
+Comment=Manage package synchronization from system tray
+Exec=/usr/bin/pacman-sync-client-tray
+Icon=pacman-sync-utility
+Terminal=false
+Type=Application
+Categories=System;PackageManager;
+StartupNotify=false
+NoDisplay=true
+EOF
+    
+    msg2 "Installing application icons..."
+    
+    # Install application icons in all standard sizes
     for size in 16 32 48 64 128 256; do
         install -Dm644 "$srcdir/icons/${size}x${size}/pacman-sync-utility.png" \
                        "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/pacman-sync-utility.png"
     done
+    
+    # Install scalable SVG icon
     install -Dm644 "$srcdir/icons/pacman-sync-utility.svg" \
                    "$pkgdir/usr/share/icons/hicolor/scalable/apps/pacman-sync-utility.svg"
+    
+    msg2 "Installing MIME type associations..."
+    
+    # Install MIME type for configuration files
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/mime/packages/pacman-sync-utility.xml" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+    <mime-type type="application/x-pacman-sync-config">
+        <comment>Pacman Sync Utility Configuration</comment>
+        <glob pattern="*.pacman-sync.conf"/>
+        <glob pattern="pacman-sync-*.conf"/>
+    </mime-type>
+</mime-info>
+EOF
+    
+    msg2 "Setting proper permissions for client files..."
+    
+    # Ensure all executable scripts have proper permissions
+    chmod 755 "$pkgdir/usr/bin/pacman-sync-client" 2>/dev/null || true
+    chmod 755 "$pkgdir/usr/bin/pacman-sync-cli" 2>/dev/null || true
+    chmod 755 "$pkgdir/usr/bin/pacman-sync-client-tray" 2>/dev/null || true
+    
+    # Ensure systemd service files have proper permissions
+    chmod 644 "$pkgdir/usr/lib/systemd/user/pacman-sync-client.service" 2>/dev/null || true
+    chmod 644 "$pkgdir/usr/lib/systemd/user/pacman-sync-client-tray.service" 2>/dev/null || true
+    
+    # Ensure desktop files have proper permissions
+    chmod 644 "$pkgdir/usr/share/applications/pacman-sync-utility.desktop" 2>/dev/null || true
+    chmod 644 "$pkgdir/usr/share/applications/pacman-sync-utility-tray.desktop" 2>/dev/null || true
+    
+    # Ensure MIME type file has proper permissions
+    chmod 644 "$pkgdir/usr/share/mime/packages/pacman-sync-utility.xml" 2>/dev/null || true
+    
+    msg2 "Client-specific files installation completed"
 }
 
 # Helper function to install server-specific files
@@ -172,40 +723,528 @@ package_pacman-sync-utility() {
                 'python-psycopg2: for PostgreSQL support'
                 'systemd: for service management')
     backup=('etc/pacman-sync-utility/client.conf'
-            'etc/pacman-sync-utility/server.conf')
+            'etc/pacman-sync-utility/server.conf'
+            'etc/pacman-sync-utility/pools.conf')
     install=pacman-sync-utility.install
     
+    msg2 "Installing main package with combined client and server components..."
+    
+    # Install all components for the complete package
     _install_common_files
     _install_client_files
     _install_server_files
+    
+    # Create additional directories for the combined package
+    install -dm755 "$pkgdir/var/lib/$pkgbase"
+    install -dm755 "$pkgdir/var/lib/$pkgbase/database"
+    install -dm755 "$pkgdir/var/lib/$pkgbase/logs"
+    install -dm755 "$pkgdir/var/lib/$pkgbase/cache"
+    install -dm755 "$pkgdir/var/lib/$pkgbase/backups"
+    
+    # Set proper permissions for runtime directories (will be handled by tmpfiles.d)
+    # These directories will be created with proper ownership by systemd-tmpfiles
+    
+    # Install additional documentation for the complete package
+    install -Dm644 CHANGELOG.md "$pkgdir/usr/share/doc/$pkgbase/CHANGELOG.md"
+    install -Dm644 docs/architecture.md "$pkgdir/usr/share/doc/$pkgbase/architecture.md"
+    install -Dm644 docs/configuration.md "$pkgdir/usr/share/doc/$pkgbase/configuration.md"
+    install -Dm644 docs/installation.md "$pkgdir/usr/share/doc/$pkgbase/installation.md"
+    install -Dm644 docs/troubleshooting.md "$pkgdir/usr/share/doc/$pkgbase/troubleshooting.md"
+    
+    # Install development and deployment documentation
+    if [ -f docs/development-setup.md ]; then
+        install -Dm644 docs/development-setup.md "$pkgdir/usr/share/doc/$pkgbase/development-setup.md"
+    fi
+    if [ -f docs/docker-deployment.md ]; then
+        install -Dm644 docs/docker-deployment.md "$pkgdir/usr/share/doc/$pkgbase/docker-deployment.md"
+    fi
+    
+    # Install API documentation
+    if [ -f docs/api-documentation.md ]; then
+        install -Dm644 docs/api-documentation.md "$pkgdir/usr/share/doc/$pkgbase/api-documentation.md"
+    fi
+    
+    # Install CLI and desktop client guides
+    if [ -f docs/cli-guide.md ]; then
+        install -Dm644 docs/cli-guide.md "$pkgdir/usr/share/doc/$pkgbase/cli-guide.md"
+    fi
+    if [ -f docs/desktop-client-guide.md ]; then
+        install -Dm644 docs/desktop-client-guide.md "$pkgdir/usr/share/doc/$pkgbase/desktop-client-guide.md"
+    fi
+    
+    # Install integration guides
+    if [ -f docs/waybar_integration.md ]; then
+        install -Dm644 docs/waybar_integration.md "$pkgdir/usr/share/doc/$pkgbase/waybar_integration.md"
+    fi
+    if [ -f docs/pacman-conf-integration.md ]; then
+        install -Dm644 docs/pacman-conf-integration.md "$pkgdir/usr/share/doc/$pkgbase/pacman-conf-integration.md"
+    fi
+    
+    # Install additional example configurations
+    if [ -d config ]; then
+        install -dm755 "$pkgdir/usr/share/doc/$pkgbase/examples/config"
+        find config -name "*.example" -o -name "*.template" -o -name "*.simple" | while read -r file; do
+            install -Dm644 "$file" "$pkgdir/usr/share/doc/$pkgbase/examples/$file"
+        done
+    fi
+    
+    # Install Docker and deployment examples
+    if [ -f docker-compose.yml ]; then
+        install -Dm644 docker-compose.yml "$pkgdir/usr/share/doc/$pkgbase/examples/docker-compose.yml"
+    fi
+    if [ -f docker-compose.scale.yml ]; then
+        install -Dm644 docker-compose.scale.yml "$pkgdir/usr/share/doc/$pkgbase/examples/docker-compose.scale.yml"
+    fi
+    if [ -d deploy ]; then
+        install -dm755 "$pkgdir/usr/share/doc/$pkgbase/examples/deploy"
+        cp -r deploy/* "$pkgdir/usr/share/doc/$pkgbase/examples/deploy/"
+        find "$pkgdir/usr/share/doc/$pkgbase/examples/deploy" -type f -exec chmod 644 {} \;
+        find "$pkgdir/usr/share/doc/$pkgbase/examples/deploy" -type d -exec chmod 755 {} \;
+    fi
+    
+    # Install database schema documentation
+    if [ -f docs/database-schema.md ]; then
+        install -Dm644 docs/database-schema.md "$pkgdir/usr/share/doc/$pkgbase/database-schema.md"
+    fi
+    
+    # Install management scripts for the complete package
+    if [ -f manage_endpoints.py ]; then
+        install -Dm755 manage_endpoints.py "$pkgdir/usr/bin/pacman-sync-manage-endpoints"
+    fi
+    if [ -f fix_database.py ]; then
+        install -Dm755 fix_database.py "$pkgdir/usr/bin/pacman-sync-fix-database"
+    fi
+    if [ -f run_migration.py ]; then
+        install -Dm755 run_migration.py "$pkgdir/usr/bin/pacman-sync-run-migration"
+    fi
+    
+    # Install validation and testing utilities
+    if [ -d scripts ]; then
+        install -dm755 "$pkgdir/usr/share/$pkgbase/scripts"
+        find scripts -name "*.py" -type f | while read -r script; do
+            install -Dm755 "$script" "$pkgdir/usr/share/$pkgbase/$script"
+        done
+    fi
+    
+    # Set proper file permissions for all installed files
+    msg2 "Setting proper file permissions and ownership..."
+    
+    # Ensure all binaries are executable
+    find "$pkgdir/usr/bin" -type f -name "pacman-sync-*" -exec chmod 755 {} \; 2>/dev/null || true
+    
+    # Ensure configuration files have proper permissions
+    find "$pkgdir/etc/$pkgbase" -type f -name "*.conf" -exec chmod 644 {} \; 2>/dev/null || true
+    find "$pkgdir/etc/$pkgbase" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    
+    # Ensure documentation has proper permissions
+    find "$pkgdir/usr/share/doc/$pkgbase" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    find "$pkgdir/usr/share/doc/$pkgbase" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    
+    # Ensure systemd service files have proper permissions
+    find "$pkgdir/usr/lib/systemd" -type f -name "*.service" -exec chmod 644 {} \; 2>/dev/null || true
+    
+    # Ensure desktop files have proper permissions
+    find "$pkgdir/usr/share/applications" -type f -name "*.desktop" -exec chmod 644 {} \; 2>/dev/null || true
+    
+    # Ensure icon files have proper permissions
+    find "$pkgdir/usr/share/icons" -type f \( -name "*.png" -o -name "*.svg" \) -exec chmod 644 {} \; 2>/dev/null || true
+    
+    # Ensure Python package files have proper permissions
+    find "$pkgdir/usr/lib/python"* -type f -name "*.py" -exec chmod 644 {} \; 2>/dev/null || true
+    find "$pkgdir/usr/lib/python"* -type d -exec chmod 755 {} \; 2>/dev/null || true
+    
+    # Ensure shared scripts have proper permissions
+    find "$pkgdir/usr/share/$pkgbase" -type f -name "*.py" -exec chmod 755 {} \; 2>/dev/null || true
+    find "$pkgdir/usr/share/$pkgbase" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    
+    msg2 "Main package installation completed successfully"
+    msg2 "Installed components: client, server, documentation, examples, and management tools"
 }
 
 # Client-only package
 package_pacman-sync-utility-client() {
     pkgdesc="Pacman Sync Utility - Client component only"
     depends=('python>=3.8' 'python-aiohttp' 'python-pyqt6' 'python-requests' 
-             'python-click' 'python-psutil' 'qt6-base')
+             'python-click' 'python-psutil' 'qt6-base' 'python-pydantic')
     optdepends=('waybar: for status bar integration'
-                'systemd: for user service management')
+                'systemd: for user service management'
+                'python-psycopg2: for PostgreSQL server connections'
+                'libnotify: for desktop notifications')
     conflicts=('pacman-sync-utility')
-    backup=('etc/pacman-sync-utility/client.conf')
+    backup=('etc/pacman-sync-utility/client.conf'
+            'etc/pacman-sync-utility/pools.conf')
     
+    msg2 "Installing client-only package with desktop integration..."
+    
+    # Install common files (shared configuration, documentation, utilities)
     _install_common_files
+    
+    # Install client-specific files (executables, services, desktop integration)
     _install_client_files
+    
+    # Install client-specific documentation
+    msg2 "Installing client-specific documentation..."
+    if [ -f docs/desktop-client-guide.md ]; then
+        install -Dm644 docs/desktop-client-guide.md "$pkgdir/usr/share/doc/$pkgbase/desktop-client-guide.md"
+    fi
+    if [ -f docs/waybar_integration.md ]; then
+        install -Dm644 docs/waybar_integration.md "$pkgdir/usr/share/doc/$pkgbase/waybar_integration.md"
+    fi
+    if [ -f docs/cli-guide.md ]; then
+        install -Dm644 docs/cli-guide.md "$pkgdir/usr/share/doc/$pkgbase/cli-guide.md"
+    fi
+    
+    # Install client-specific configuration examples
+    msg2 "Installing client-specific configuration examples..."
+    install -dm755 "$pkgdir/usr/share/doc/$pkgbase/examples/client"
+    if [ -f config/client.conf.simple ]; then
+        install -Dm644 config/client.conf.simple "$pkgdir/usr/share/doc/$pkgbase/examples/client/client.conf.simple"
+    fi
+    if [ -f docs/waybar_config_example.json ]; then
+        install -Dm644 docs/waybar_config_example.json "$pkgdir/usr/share/doc/$pkgbase/examples/client/waybar_config_example.json"
+    fi
+    if [ -f docs/waybar_style_example.css ]; then
+        install -Dm644 docs/waybar_style_example.css "$pkgdir/usr/share/doc/$pkgbase/examples/client/waybar_style_example.css"
+    fi
+    
+    # Create client-specific directories
+    msg2 "Creating client-specific directories..."
+    install -dm755 "$pkgdir/var/lib/$pkgbase/client"
+    install -dm755 "$pkgdir/var/lib/$pkgbase/client/cache"
+    install -dm755 "$pkgdir/var/lib/$pkgbase/client/logs"
+    
+    # Install autostart desktop file for optional autostart functionality
+    msg2 "Installing autostart desktop entry..."
+    install -dm755 "$pkgdir/etc/xdg/autostart"
+    install -Dm644 /dev/stdin "$pkgdir/etc/xdg/autostart/pacman-sync-utility-client.desktop" << 'EOF'
+[Desktop Entry]
+Name=Pacman Sync Utility Client
+Comment=Start Pacman Sync Utility client in system tray
+Exec=/usr/bin/pacman-sync-client --tray
+Icon=pacman-sync-utility
+Terminal=false
+Type=Application
+Categories=System;PackageManager;
+StartupNotify=false
+Hidden=true
+X-GNOME-Autostart-enabled=false
+EOF
+    
+    # Set proper permissions for client-specific files
+    msg2 "Setting proper permissions for client files..."
+    find "$pkgdir/usr/share/doc/$pkgbase/examples/client" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    find "$pkgdir/usr/share/doc/$pkgbase/examples/client" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    
+    # Ensure desktop integration files have proper permissions
+    chmod 644 "$pkgdir/usr/share/applications/pacman-sync-utility.desktop" 2>/dev/null || true
+    chmod 644 "$pkgdir/etc/xdg/autostart/pacman-sync-utility-client.desktop" 2>/dev/null || true
+    find "$pkgdir/usr/share/icons" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    find "$pkgdir/usr/share/icons" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    
+    msg2 "Client-only package installation completed"
 }
 
 # Server-only package
 package_pacman-sync-utility-server() {
     pkgdesc="Pacman Sync Utility - Server component only"
     depends=('python>=3.8' 'python-fastapi' 'python-uvicorn' 'python-asyncpg' 
-             'python-pydantic' 'python-jwt' 'python-bcrypt' 'python-click' 'python-psutil')
+             'python-pydantic' 'python-jwt' 'python-bcrypt' 'python-click' 'python-psutil'
+             'python-aiohttp' 'python-requests')
     optdepends=('postgresql: for production database backend'
                 'python-psycopg2: for PostgreSQL support'
-                'systemd: for service management')
+                'systemd: for service management'
+                'nginx: for reverse proxy setup'
+                'haproxy: for load balancing multiple server instances')
     conflicts=('pacman-sync-utility')
-    backup=('etc/pacman-sync-utility/server.conf')
+    backup=('etc/pacman-sync-utility/server.conf'
+            'etc/pacman-sync-utility/pools.conf')
     install=pacman-sync-utility.install
     
+    msg2 "Installing server-only package with database and service integration..."
+    
+    # Install common files (shared configuration, documentation, utilities)
     _install_common_files
+    
+    # Install server-specific files (executables, services, system integration)
     _install_server_files
+    
+    # Install server-specific documentation
+    msg2 "Installing server-specific documentation..."
+    if [ -f docs/api-documentation.md ]; then
+        install -Dm644 docs/api-documentation.md "$pkgdir/usr/share/doc/$pkgbase/api-documentation.md"
+    fi
+    if [ -f docs/database-schema.md ]; then
+        install -Dm644 docs/database-schema.md "$pkgdir/usr/share/doc/$pkgbase/database-schema.md"
+    fi
+    if [ -f docs/docker-deployment.md ]; then
+        install -Dm644 docs/docker-deployment.md "$pkgdir/usr/share/doc/$pkgbase/docker-deployment.md"
+    fi
+    if [ -f docs/container-orchestration.md ]; then
+        install -Dm644 docs/container-orchestration.md "$pkgdir/usr/share/doc/$pkgbase/container-orchestration.md"
+    fi
+    
+    # Install server-specific configuration examples and templates
+    msg2 "Installing server-specific configuration examples..."
+    install -dm755 "$pkgdir/usr/share/doc/$pkgbase/examples/server"
+    install -dm755 "$pkgdir/usr/share/doc/$pkgbase/examples/deployment"
+    
+    # Install deployment configuration examples
+    if [ -d deploy ]; then
+        msg2 "Installing deployment configuration examples..."
+        cp -r deploy/* "$pkgdir/usr/share/doc/$pkgbase/examples/deployment/"
+        find "$pkgdir/usr/share/doc/$pkgbase/examples/deployment" -type f -exec chmod 644 {} \;
+        find "$pkgdir/usr/share/doc/$pkgbase/examples/deployment" -type d -exec chmod 755 {} \;
+    fi
+    
+    # Install server configuration templates
+    if [ -f config/server.conf.template ]; then
+        install -Dm644 config/server.conf.template "$pkgdir/usr/share/doc/$pkgbase/examples/server/server.conf.template"
+    fi
+    
+    # Install database configuration examples
+    if [ -f docs/postgresql-setup.md ]; then
+        install -Dm644 docs/postgresql-setup.md "$pkgdir/usr/share/doc/$pkgbase/examples/server/postgresql-setup.md"
+    fi
+    
+    # Create server-specific directories with proper structure
+    msg2 "Creating server-specific directories..."
+    install -dm755 "$pkgdir/var/lib/$pkgbase/server"
+    install -dm755 "$pkgdir/var/lib/$pkgbase/server/database"
+    install -dm755 "$pkgdir/var/lib/$pkgbase/server/logs"
+    install -dm755 "$pkgdir/var/lib/$pkgbase/server/cache"
+    install -dm755 "$pkgdir/var/lib/$pkgbase/server/backups"
+    install -dm755 "$pkgdir/var/lib/$pkgbase/server/ssl"
+    install -dm755 "$pkgdir/var/lib/$pkgbase/server/uploads"
+    
+    # Install database management and migration utilities
+    msg2 "Installing database management utilities..."
+    if [ -f manage_endpoints.py ]; then
+        install -Dm755 manage_endpoints.py "$pkgdir/usr/bin/pacman-sync-manage-endpoints"
+    fi
+    if [ -f fix_database.py ]; then
+        install -Dm755 fix_database.py "$pkgdir/usr/bin/pacman-sync-fix-database"
+    fi
+    if [ -f run_migration.py ]; then
+        install -Dm755 run_migration.py "$pkgdir/usr/bin/pacman-sync-run-migration"
+    fi
+    
+    # Install server database initialization script
+    install -Dm755 /dev/stdin "$pkgdir/usr/bin/pacman-sync-init-database" << 'EOF'
+#!/bin/bash
+# Pacman Sync Utility Database Initialization Script
+# Initializes the database schema and creates necessary tables
+
+# Set up environment
+export PYTHONPATH="/usr/lib/python$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages:$PYTHONPATH"
+
+# Check if running as the correct user
+if [ "$USER" != "pacman-sync" ] && [ "$EUID" -eq 0 ]; then
+    echo "Switching to pacman-sync user for database initialization..."
+    exec sudo -u pacman-sync "$0" "$@"
+fi
+
+# Initialize database with proper error handling
+echo "Initializing Pacman Sync Utility database..."
+python3 -m server.main --init-db "$@" || {
+    echo "Database initialization failed" >&2
+    exit 1
+}
+
+echo "Database initialization completed successfully"
+EOF
+    
+    # Install server backup and maintenance scripts
+    install -Dm755 /dev/stdin "$pkgdir/usr/bin/pacman-sync-backup-database" << 'EOF'
+#!/bin/bash
+# Pacman Sync Utility Database Backup Script
+# Creates backups of the database with timestamp
+
+BACKUP_DIR="/var/lib/pacman-sync-utility/server/backups"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+CONFIG_FILE="/etc/pacman-sync-utility/server.conf"
+
+# Ensure backup directory exists
+mkdir -p "$BACKUP_DIR"
+
+# Check if running as the correct user
+if [ "$USER" != "pacman-sync" ] && [ "$EUID" -eq 0 ]; then
+    echo "Switching to pacman-sync user for database backup..."
+    exec sudo -u pacman-sync "$0" "$@"
+fi
+
+# Determine database type and create backup
+if grep -q "postgresql://" "$CONFIG_FILE" 2>/dev/null; then
+    echo "Creating PostgreSQL database backup..."
+    # Extract database connection details from config
+    DB_URL=$(grep "database_url" "$CONFIG_FILE" | cut -d'"' -f2)
+    pg_dump "$DB_URL" > "$BACKUP_DIR/pacman_sync_backup_${TIMESTAMP}.sql"
+else
+    echo "Creating SQLite database backup..."
+    DB_FILE="/var/lib/pacman-sync-utility/server/database/server.db"
+    if [ -f "$DB_FILE" ]; then
+        cp "$DB_FILE" "$BACKUP_DIR/server_backup_${TIMESTAMP}.db"
+    else
+        echo "Warning: Database file not found at $DB_FILE" >&2
+    fi
+fi
+
+echo "Database backup completed: $BACKUP_DIR/pacman_sync_backup_${TIMESTAMP}.*"
+EOF
+    
+    # Install server monitoring and health check script
+    install -Dm755 /dev/stdin "$pkgdir/usr/bin/pacman-sync-health-check" << 'EOF'
+#!/bin/bash
+# Pacman Sync Utility Server Health Check Script
+# Performs health checks on the server and its dependencies
+
+CONFIG_FILE="/etc/pacman-sync-utility/server.conf"
+SERVER_URL="http://localhost:8000"
+
+# Extract server URL from configuration if available
+if [ -f "$CONFIG_FILE" ]; then
+    HOST=$(grep "host" "$CONFIG_FILE" | cut -d'"' -f2 | head -1)
+    PORT=$(grep "port" "$CONFIG_FILE" | cut -d':' -f2 | tr -d ' ' | head -1)
+    if [ -n "$HOST" ] && [ -n "$PORT" ]; then
+        SERVER_URL="http://${HOST}:${PORT}"
+    fi
+fi
+
+echo "Performing health check on Pacman Sync Utility Server..."
+echo "Server URL: $SERVER_URL"
+
+# Check if server is responding
+if curl -s -f "$SERVER_URL/health" >/dev/null 2>&1; then
+    echo "✓ Server is responding"
+else
+    echo "✗ Server is not responding"
+    exit 1
+fi
+
+# Check database connectivity
+if curl -s -f "$SERVER_URL/health/database" >/dev/null 2>&1; then
+    echo "✓ Database is accessible"
+else
+    echo "✗ Database connectivity issues"
+    exit 1
+fi
+
+echo "Health check completed successfully"
+EOF
+    
+    # Install server log rotation configuration
+    install -Dm644 /dev/stdin "$pkgdir/etc/logrotate.d/pacman-sync-utility-server" << 'EOF'
+/var/lib/pacman-sync-utility/server/logs/*.log {
+    daily
+    missingok
+    rotate 30
+    compress
+    delaycompress
+    notifempty
+    create 644 pacman-sync pacman-sync
+    postrotate
+        systemctl reload pacman-sync-server 2>/dev/null || true
+    endscript
+}
+EOF
+    
+    # Install server-specific systemd service override directory
+    install -dm755 "$pkgdir/etc/systemd/system/pacman-sync-server.service.d"
+    install -Dm644 /dev/stdin "$pkgdir/etc/systemd/system/pacman-sync-server.service.d/override.conf.example" << 'EOF'
+# Example systemd service override for Pacman Sync Utility Server
+# Copy this file to override.conf and modify as needed
+# This file provides examples for common server configurations
+
+[Unit]
+# Add additional dependencies if needed
+# After=postgresql.service redis.service
+# Wants=postgresql.service
+
+[Service]
+# Environment variables for server configuration
+# Environment=DATABASE_URL=postgresql://user:pass@localhost/pacman_sync
+# Environment=JWT_SECRET_KEY=your-secret-key-here
+# Environment=LOG_LEVEL=INFO
+# Environment=WORKERS=4
+
+# Resource limits
+# LimitNOFILE=65536
+# MemoryMax=2G
+# CPUQuota=200%
+
+# Security hardening
+# NoNewPrivileges=yes
+# ProtectSystem=strict
+# ProtectHome=yes
+# ReadWritePaths=/var/lib/pacman-sync-utility
+EOF
+    
+    # Install server performance monitoring script
+    install -Dm755 /dev/stdin "$pkgdir/usr/bin/pacman-sync-server-stats" << 'EOF'
+#!/bin/bash
+# Pacman Sync Utility Server Statistics Script
+# Displays server performance and usage statistics
+
+CONFIG_FILE="/etc/pacman-sync-utility/server.conf"
+SERVER_URL="http://localhost:8000"
+
+# Extract server URL from configuration if available
+if [ -f "$CONFIG_FILE" ]; then
+    HOST=$(grep "host" "$CONFIG_FILE" | cut -d'"' -f2 | head -1)
+    PORT=$(grep "port" "$CONFIG_FILE" | cut -d':' -f2 | tr -d ' ' | head -1)
+    if [ -n "$HOST" ] && [ -n "$PORT" ]; then
+        SERVER_URL="http://${HOST}:${PORT}"
+    fi
+fi
+
+echo "Pacman Sync Utility Server Statistics"
+echo "====================================="
+echo "Server URL: $SERVER_URL"
+echo
+
+# Check service status
+echo "Service Status:"
+systemctl is-active pacman-sync-server >/dev/null 2>&1 && echo "✓ Service is running" || echo "✗ Service is not running"
+echo
+
+# Get server metrics if available
+if curl -s -f "$SERVER_URL/metrics" >/dev/null 2>&1; then
+    echo "Server Metrics:"
+    curl -s "$SERVER_URL/metrics" | head -20
+else
+    echo "Server metrics not available"
+fi
+
+echo
+echo "System Resources:"
+echo "Memory usage: $(ps -o pid,ppid,cmd,%mem,%cpu --sort=-%mem -C python | grep server.main | head -1 | awk '{print $4"%"}')"
+echo "CPU usage: $(ps -o pid,ppid,cmd,%mem,%cpu --sort=-%cpu -C python | grep server.main | head -1 | awk '{print $5"%"}')"
+
+echo
+echo "Log file sizes:"
+find /var/lib/pacman-sync-utility/server/logs -name "*.log" -exec ls -lh {} \; 2>/dev/null | awk '{print $9 ": " $5}'
+EOF
+    
+    # Set proper permissions for all server-specific files
+    msg2 "Setting proper permissions for server files..."
+    
+    # Ensure all server binaries are executable
+    find "$pkgdir/usr/bin" -type f -name "pacman-sync-*" -exec chmod 755 {} \; 2>/dev/null || true
+    
+    # Ensure server configuration files have proper permissions
+    find "$pkgdir/usr/share/doc/$pkgbase/examples/server" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    find "$pkgdir/usr/share/doc/$pkgbase/examples/server" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    find "$pkgdir/usr/share/doc/$pkgbase/examples/deployment" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    find "$pkgdir/usr/share/doc/$pkgbase/examples/deployment" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    
+    # Ensure systemd service override has proper permissions
+    chmod 644 "$pkgdir/etc/systemd/system/pacman-sync-server.service.d/override.conf.example" 2>/dev/null || true
+    
+    # Ensure logrotate configuration has proper permissions
+    chmod 644 "$pkgdir/etc/logrotate.d/pacman-sync-utility-server" 2>/dev/null || true
+    
+    # Ensure server directories have proper permissions (ownership will be set by tmpfiles.d)
+    find "$pkgdir/var/lib/$pkgbase/server" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    
+    msg2 "Server-only package installation completed"
+    msg2 "Installed components: server, database management, monitoring tools, and deployment examples"
 }

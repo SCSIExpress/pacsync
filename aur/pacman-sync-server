@@ -1,0 +1,799 @@
+#!/bin/bash
+#
+# Pacman Sync Utility Server Wrapper Script
+# 
+# This script provides a wrapper for the pacman-sync-utility server component,
+# handling environment setup, database initialization, migration support, 
+# service management integration, and proper Python module execution.
+#
+# Installation: This script should be installed to /usr/bin/pacman-sync-server
+# Usage: pacman-sync-server [options]
+#
+
+set -euo pipefail
+
+# Script metadata
+SCRIPT_NAME="pacman-sync-server"
+SCRIPT_VERSION="1.0.0"
+PYTHON_MODULE="server.main"
+
+# Default paths and configuration
+DEFAULT_CONFIG_DIR="/etc/pacman-sync-utility"
+DEFAULT_DATA_DIR="/var/lib/pacman-sync-utility"
+DEFAULT_LOG_DIR="/var/log/pacman-sync-utility"
+DEFAULT_DATABASE_DIR="$DEFAULT_DATA_DIR/database"
+DEFAULT_CONFIG_FILE="$DEFAULT_CONFIG_DIR/server.conf"
+
+# Service management
+SYSTEMD_SERVICE_NAME="pacman-sync-server.service"
+SERVICE_USER="pacman-sync"
+SERVICE_GROUP="pacman-sync"
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Logging functions
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1" >&2
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1" >&2
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+}
+
+log_debug() {
+    if [[ "${DEBUG:-0}" == "1" ]]; then
+        echo -e "${BLUE}[DEBUG]${NC} $1" >&2
+    fi
+}
+
+# Function to show usage information
+show_usage() {
+    cat << EOF
+Usage: $SCRIPT_NAME [options]
+
+Pacman Sync Utility Server - Central synchronization server with REST API and web UI
+
+OPERATION MODES:
+  (no options)          Run server in foreground mode
+  --daemon              Run server as daemon (background)
+  --init-db             Initialize database and exit
+  --migrate-db          Run database migrations and exit
+  --check-db            Check database status and exit
+  --reset-db            Reset database (WARNING: destroys all data)
+
+SERVICE MANAGEMENT:
+  --start               Start systemd service
+  --stop                Stop systemd service
+  --restart             Restart systemd service
+  --status              Show systemd service status
+  --enable              Enable systemd service for auto-start
+  --disable             Disable systemd service auto-start
+  --logs                Show systemd service logs
+
+CONFIGURATION:
+  --config FILE         Path to configuration file (default: $DEFAULT_CONFIG_FILE)
+  --host HOST           Override server host (default: from config)
+  --port PORT           Override server port (default: from config)
+  --database-url URL    Override database URL
+  --log-level LEVEL     Override log level (DEBUG|INFO|WARNING|ERROR)
+
+DATABASE MANAGEMENT:
+  --db-type TYPE        Database type (internal|postgresql)
+  --db-init             Initialize database schema
+  --db-migrate          Run pending migrations
+  --db-status           Show migration status
+  --db-rollback VERSION Rollback to specific migration version
+  --db-backup FILE      Backup database to file
+  --db-restore FILE     Restore database from file
+
+SECURITY:
+  --generate-secret     Generate new JWT secret key
+  --rotate-secret       Rotate JWT secret key
+  --create-admin-token  Create admin authentication token
+
+OUTPUT FORMAT:
+  --json                Output status in JSON format
+  --verbose, -v         Enable verbose output
+  --quiet, -q           Suppress non-error output
+
+ADVANCED OPTIONS:
+  --timeout SECONDS     Operation timeout in seconds (default: 60)
+  --force               Force operation even if risky
+  --dry-run             Show what would be done without executing
+  --environment ENV     Set environment (development|production)
+
+DEBUG OPTIONS:
+  --debug               Enable debug logging
+  --log-file FILE       Log to file instead of console
+  --profile             Enable performance profiling
+
+WRAPPER OPTIONS:
+  --help, -h            Show this help message
+  --version             Show version information
+  --check-deps          Check for required dependencies
+  --env-info            Show environment information
+  --validate-config     Validate configuration file
+
+EXAMPLES:
+  $SCRIPT_NAME                    # Run server in foreground
+  $SCRIPT_NAME --daemon           # Run server as daemon
+  $SCRIPT_NAME --init-db          # Initialize database
+  $SCRIPT_NAME --migrate-db       # Run database migrations
+  $SCRIPT_NAME --start            # Start systemd service
+  $SCRIPT_NAME --status           # Show service status
+  $SCRIPT_NAME --logs             # Show service logs
+
+  Database Management:
+  $SCRIPT_NAME --db-status        # Show migration status
+  $SCRIPT_NAME --db-backup /tmp/backup.sql  # Backup database
+  $SCRIPT_NAME --generate-secret  # Generate new JWT secret
+
+EXIT CODES:
+  0   - Success
+  1   - Operation failed
+  2   - Database error
+  3   - Configuration error
+  4   - Permission error
+  5   - Service management error
+  6   - Missing dependencies
+  7   - Unexpected error
+  8   - Database migration error
+  9   - Authentication error
+  130 - Cancelled by user (Ctrl+C)
+
+For more information, see the documentation at:
+https://github.com/user/pacman-sync-utility/docs/
+EOF
+}
+
+# Function to show version information
+show_version() {
+    cat << EOF
+$SCRIPT_NAME version $SCRIPT_VERSION
+Pacman Sync Utility Server Wrapper
+
+Copyright (c) 2024 Pacman Sync Utility Project
+Licensed under the MIT License.
+
+This is free software; see the source for copying conditions.
+There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.
+EOF
+}
+
+# Function to check for required Python version
+check_python_version() {
+    log_debug "Checking Python version..."
+    
+    if ! command -v python3 >/dev/null 2>&1; then
+        log_error "Python 3 is not installed or not in PATH"
+        return 1
+    fi
+    
+    local python_version
+    python_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    
+    log_debug "Found Python version: $python_version"
+    
+    # Check if Python version is 3.8 or higher
+    if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)"; then
+        log_debug "Python version check passed"
+        return 0
+    else
+        log_error "Python 3.8 or higher is required, found: $python_version"
+        return 1
+    fi
+}
+
+# Function to check for required Python dependencies
+check_python_dependencies() {
+    log_debug "Checking Python dependencies..."
+    
+    local required_packages=(
+        "fastapi"
+        "uvicorn"
+        "aiohttp"
+        "pydantic"
+        "asyncpg"
+        "aiosqlite"
+    )
+    
+    local missing_packages=()
+    
+    for package in "${required_packages[@]}"; do
+        log_debug "Checking for Python package: $package"
+        if ! python3 -c "import $package" >/dev/null 2>&1; then
+            missing_packages+=("$package")
+        fi
+    done
+    
+    if [[ ${#missing_packages[@]} -gt 0 ]]; then
+        log_error "Missing required Python packages: ${missing_packages[*]}"
+        log_error "Please install missing packages using your package manager or pip:"
+        log_error "  pacman -S python-fastapi python-uvicorn python-aiohttp python-pydantic python-asyncpg python-aiosqlite"
+        log_error "  or: pip install fastapi uvicorn aiohttp pydantic asyncpg aiosqlite"
+        return 1
+    fi
+    
+    log_debug "All required Python dependencies are available"
+    return 0
+}
+
+# Function to check for optional dependencies
+check_optional_dependencies() {
+    log_debug "Checking optional dependencies..."
+    
+    local optional_packages=(
+        "psycopg2:PostgreSQL support"
+        "redis:Redis caching support"
+        "prometheus_client:Metrics support"
+    )
+    
+    local missing_optional=()
+    
+    for package_info in "${optional_packages[@]}"; do
+        local package="${package_info%%:*}"
+        local description="${package_info##*:}"
+        
+        log_debug "Checking for optional package: $package"
+        
+        if ! python3 -c "import $package" >/dev/null 2>&1; then
+            missing_optional+=("$package ($description)")
+        fi
+    done
+    
+    if [[ ${#missing_optional[@]} -gt 0 ]]; then
+        log_warn "Optional dependencies not available:"
+        for package in "${missing_optional[@]}"; do
+            log_warn "  - $package"
+        done
+        log_warn "Some features may not be available."
+    fi
+}
+
+# Function to check system requirements
+check_system_requirements() {
+    log_debug "Checking system requirements..."
+    
+    # Check for required system directories
+    local required_dirs=(
+        "$DEFAULT_CONFIG_DIR"
+        "$DEFAULT_DATA_DIR"
+        "$DEFAULT_LOG_DIR"
+        "$DEFAULT_DATABASE_DIR"
+    )
+    
+    for dir in "${required_dirs[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            log_warn "System directory not found: $dir"
+            log_warn "Some features may not work correctly."
+        fi
+    done
+    
+    # Check for systemd (for service management)
+    if ! command -v systemctl >/dev/null 2>&1; then
+        log_warn "systemctl not found - service management features will not work"
+    fi
+    
+    # Check for service user
+    if ! id "$SERVICE_USER" >/dev/null 2>&1; then
+        log_warn "Service user '$SERVICE_USER' not found - service may not start correctly"
+    fi
+}
+
+# Function to perform comprehensive dependency check
+check_dependencies() {
+    log_info "Performing dependency check..."
+    
+    local check_failed=0
+    
+    # Check Python version
+    if ! check_python_version; then
+        check_failed=1
+    fi
+    
+    # Check required Python dependencies
+    if ! check_python_dependencies; then
+        check_failed=1
+    fi
+    
+    # Check optional dependencies (warnings only)
+    check_optional_dependencies
+    
+    # Check system requirements (warnings only)
+    check_system_requirements
+    
+    if [[ $check_failed -eq 1 ]]; then
+        log_error "Dependency check failed. Please install missing dependencies."
+        return 1
+    fi
+    
+    log_info "Dependency check passed successfully"
+    return 0
+}
+
+# Function to show environment information
+show_env_info() {
+    cat << EOF
+Environment Information:
+========================
+
+System Information:
+  OS: $(uname -s)
+  Kernel: $(uname -r)
+  Architecture: $(uname -m)
+  
+Python Information:
+  Python Version: $(python3 --version 2>&1 || echo "Not available")
+  Python Path: $(command -v python3 || echo "Not found")
+  Python Executable: $(python3 -c "import sys; print(sys.executable)" 2>/dev/null || echo "Not available")
+
+Service Information:
+  Service Name: $SYSTEMD_SERVICE_NAME
+  Service User: $SERVICE_USER
+  Service Group: $SERVICE_GROUP
+  Service Status: $(systemctl is-active $SYSTEMD_SERVICE_NAME 2>/dev/null || echo "Unknown")
+
+Configuration Paths:
+  Config Directory: $DEFAULT_CONFIG_DIR
+  Config File: $DEFAULT_CONFIG_FILE
+  Data Directory: $DEFAULT_DATA_DIR
+  Database Directory: $DEFAULT_DATABASE_DIR
+  Log Directory: $DEFAULT_LOG_DIR
+
+Environment Variables:
+  HOME: ${HOME:-"Not set"}
+  USER: ${USER:-"Not set"}
+  PATH: ${PATH:-"Not set"}
+  PYTHONPATH: ${PYTHONPATH:-"Not set"}
+  DATABASE_URL: ${DATABASE_URL:-"Not set"}
+  HTTP_HOST: ${HTTP_HOST:-"Not set"}
+  HTTP_PORT: ${HTTP_PORT:-"Not set"}
+
+Package Information:
+  Script: $SCRIPT_NAME
+  Version: $SCRIPT_VERSION
+  Module: $PYTHON_MODULE
+EOF
+}
+
+# Function to validate configuration file
+validate_config() {
+    local config_file="${1:-$DEFAULT_CONFIG_FILE}"
+    
+    log_info "Validating configuration file: $config_file"
+    
+    if [[ ! -f "$config_file" ]]; then
+        log_error "Configuration file not found: $config_file"
+        return 1
+    fi
+    
+    if [[ ! -r "$config_file" ]]; then
+        log_error "Configuration file not readable: $config_file"
+        return 1
+    fi
+    
+    # Use Python to validate the configuration
+    if python3 -c "
+import sys
+sys.path.insert(0, '/usr/lib/python3.*/site-packages')
+try:
+    from server.config import get_config
+    config = get_config()
+    print('Configuration validation passed')
+except Exception as e:
+    print(f'Configuration validation failed: {e}')
+    sys.exit(1)
+" 2>/dev/null; then
+        log_info "Configuration validation passed"
+        return 0
+    else
+        log_error "Configuration validation failed"
+        return 1
+    fi
+}
+
+# Function to initialize database
+init_database() {
+    log_info "Initializing database..."
+    
+    # Create database directory if it doesn't exist
+    if [[ ! -d "$DEFAULT_DATABASE_DIR" ]]; then
+        log_info "Creating database directory: $DEFAULT_DATABASE_DIR"
+        mkdir -p "$DEFAULT_DATABASE_DIR"
+        chown "$SERVICE_USER:$SERVICE_GROUP" "$DEFAULT_DATABASE_DIR" 2>/dev/null || true
+        chmod 750 "$DEFAULT_DATABASE_DIR" 2>/dev/null || true
+    fi
+    
+    # Run database initialization
+    python3 -c "
+import sys
+import asyncio
+sys.path.insert(0, '/usr/lib/python3.*/site-packages')
+
+async def init_db():
+    try:
+        from server.database.connection import DatabaseManager
+        from server.database.migrations import run_migrations
+        
+        print('Connecting to database...')
+        db_manager = DatabaseManager(database_type='internal')
+        await db_manager.initialize()
+        
+        print('Running database migrations...')
+        success = await run_migrations(db_manager)
+        
+        if success:
+            print('Database initialization completed successfully')
+            await db_manager.close()
+            return 0
+        else:
+            print('Database initialization failed')
+            await db_manager.close()
+            return 1
+            
+    except Exception as e:
+        print(f'Database initialization error: {e}')
+        return 1
+
+sys.exit(asyncio.run(init_db()))
+"
+    
+    local exit_code=$?
+    if [[ $exit_code -eq 0 ]]; then
+        log_info "Database initialization completed successfully"
+        return 0
+    else
+        log_error "Database initialization failed"
+        return 1
+    fi
+}
+
+# Function to run database migrations
+migrate_database() {
+    log_info "Running database migrations..."
+    
+    python3 -c "
+import sys
+import asyncio
+sys.path.insert(0, '/usr/lib/python3.*/site-packages')
+
+async def migrate_db():
+    try:
+        from server.database.connection import DatabaseManager
+        from server.database.migrations import run_migrations
+        
+        print('Connecting to database...')
+        db_manager = DatabaseManager(database_type='internal')
+        await db_manager.initialize()
+        
+        print('Running pending migrations...')
+        success = await run_migrations(db_manager)
+        
+        if success:
+            print('Database migrations completed successfully')
+            await db_manager.close()
+            return 0
+        else:
+            print('Database migrations failed')
+            await db_manager.close()
+            return 1
+            
+    except Exception as e:
+        print(f'Database migration error: {e}')
+        return 1
+
+sys.exit(asyncio.run(migrate_db()))
+"
+    
+    local exit_code=$?
+    if [[ $exit_code -eq 0 ]]; then
+        log_info "Database migrations completed successfully"
+        return 0
+    else
+        log_error "Database migrations failed"
+        return 1
+    fi
+}
+
+# Function to check database status
+check_database() {
+    log_info "Checking database status..."
+    
+    python3 -c "
+import sys
+import asyncio
+import json
+sys.path.insert(0, '/usr/lib/python3.*/site-packages')
+
+async def check_db():
+    try:
+        from server.database.connection import DatabaseManager
+        from server.database.migrations import get_migration_status
+        
+        print('Connecting to database...')
+        db_manager = DatabaseManager(database_type='internal')
+        await db_manager.initialize()
+        
+        print('Getting migration status...')
+        status = await get_migration_status(db_manager)
+        
+        print('Database Status:')
+        print(f'  Database Type: {status.get(\"database_type\", \"Unknown\")}')
+        print(f'  Total Migrations: {status.get(\"total_migrations\", 0)}')
+        print(f'  Applied Migrations: {status.get(\"applied_count\", 0)}')
+        print(f'  Pending Migrations: {status.get(\"pending_count\", 0)}')
+        print(f'  Current Version: {status.get(\"current_version\", \"None\")}')
+        
+        if status.get('pending_count', 0) > 0:
+            print('  Pending Versions:', ', '.join(status.get('pending_versions', [])))
+        
+        await db_manager.close()
+        return 0
+        
+    except Exception as e:
+        print(f'Database status check error: {e}')
+        return 1
+
+sys.exit(asyncio.run(check_db()))
+"
+    
+    local exit_code=$?
+    if [[ $exit_code -eq 0 ]]; then
+        log_info "Database status check completed"
+        return 0
+    else
+        log_error "Database status check failed"
+        return 1
+    fi
+}
+
+# Function to generate JWT secret
+generate_secret() {
+    log_info "Generating new JWT secret key..."
+    
+    local secret_file="$DEFAULT_CONFIG_DIR/jwt-secret"
+    
+    # Generate a secure random key
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32 > "$secret_file"
+    else
+        # Fallback to Python
+        python3 -c "
+import secrets
+with open('$secret_file', 'w') as f:
+    f.write(secrets.token_hex(32))
+"
+    fi
+    
+    # Set proper permissions
+    chmod 600 "$secret_file"
+    chown "$SERVICE_USER:$SERVICE_GROUP" "$secret_file" 2>/dev/null || true
+    
+    log_info "JWT secret key generated and saved to: $secret_file"
+    log_warn "Please update your configuration to use this secret key"
+}
+
+# Function to manage systemd service
+manage_service() {
+    local action="$1"
+    
+    if ! command -v systemctl >/dev/null 2>&1; then
+        log_error "systemctl not found - cannot manage service"
+        return 1
+    fi
+    
+    case "$action" in
+        start)
+            log_info "Starting $SYSTEMD_SERVICE_NAME..."
+            systemctl start "$SYSTEMD_SERVICE_NAME"
+            ;;
+        stop)
+            log_info "Stopping $SYSTEMD_SERVICE_NAME..."
+            systemctl stop "$SYSTEMD_SERVICE_NAME"
+            ;;
+        restart)
+            log_info "Restarting $SYSTEMD_SERVICE_NAME..."
+            systemctl restart "$SYSTEMD_SERVICE_NAME"
+            ;;
+        status)
+            systemctl status "$SYSTEMD_SERVICE_NAME"
+            ;;
+        enable)
+            log_info "Enabling $SYSTEMD_SERVICE_NAME for auto-start..."
+            systemctl enable "$SYSTEMD_SERVICE_NAME"
+            ;;
+        disable)
+            log_info "Disabling $SYSTEMD_SERVICE_NAME auto-start..."
+            systemctl disable "$SYSTEMD_SERVICE_NAME"
+            ;;
+        logs)
+            journalctl -u "$SYSTEMD_SERVICE_NAME" -f
+            ;;
+        *)
+            log_error "Unknown service action: $action"
+            return 1
+            ;;
+    esac
+}
+
+# Function to setup environment variables
+setup_environment() {
+    log_debug "Setting up environment..."
+    
+    # Set default configuration paths if not already set
+    export PACMAN_SYNC_CONFIG_DIR="${PACMAN_SYNC_CONFIG_DIR:-$DEFAULT_CONFIG_DIR}"
+    export PACMAN_SYNC_DATA_DIR="${PACMAN_SYNC_DATA_DIR:-$DEFAULT_DATA_DIR}"
+    export PACMAN_SYNC_LOG_DIR="${PACMAN_SYNC_LOG_DIR:-$DEFAULT_LOG_DIR}"
+    export PACMAN_SYNC_DATABASE_DIR="${PACMAN_SYNC_DATABASE_DIR:-$DEFAULT_DATABASE_DIR}"
+    
+    # Create directories if they don't exist (with proper permissions)
+    for dir in "$PACMAN_SYNC_DATA_DIR" "$PACMAN_SYNC_LOG_DIR" "$PACMAN_SYNC_DATABASE_DIR"; do
+        if [[ ! -d "$dir" ]]; then
+            mkdir -p "$dir" 2>/dev/null || true
+            chown "$SERVICE_USER:$SERVICE_GROUP" "$dir" 2>/dev/null || true
+            chmod 750 "$dir" 2>/dev/null || true
+        fi
+    done
+    
+    log_debug "Environment setup completed"
+}
+
+# Function to handle script interruption
+cleanup() {
+    local exit_code=$?
+    log_debug "Cleanup function called with exit code: $exit_code"
+    
+    # Kill any background processes if needed
+    # (Currently not needed, but placeholder for future use)
+    
+    exit $exit_code
+}
+
+# Function to execute the Python module
+execute_python_module() {
+    log_debug "Executing Python module: $PYTHON_MODULE"
+    log_debug "Arguments: $*"
+    
+    # Execute the Python module with all arguments passed through
+    exec python3 -m "$PYTHON_MODULE" "$@"
+}
+
+# Main function
+main() {
+    # Set up signal handlers
+    trap cleanup EXIT INT TERM
+    
+    # Parse wrapper-specific arguments first
+    local python_args=()
+    local skip_next=0
+    local wrapper_action=""
+    
+    for arg in "$@"; do
+        if [[ $skip_next -eq 1 ]]; then
+            skip_next=0
+            continue
+        fi
+        
+        case "$arg" in
+            --help|-h)
+                show_usage
+                exit 0
+                ;;
+            --version)
+                show_version
+                exit 0
+                ;;
+            --check-deps)
+                check_dependencies
+                exit $?
+                ;;
+            --env-info)
+                show_env_info
+                exit 0
+                ;;
+            --validate-config)
+                validate_config
+                exit $?
+                ;;
+            --init-db)
+                wrapper_action="init-db"
+                ;;
+            --migrate-db)
+                wrapper_action="migrate-db"
+                ;;
+            --check-db)
+                wrapper_action="check-db"
+                ;;
+            --generate-secret)
+                wrapper_action="generate-secret"
+                ;;
+            --start)
+                wrapper_action="service-start"
+                ;;
+            --stop)
+                wrapper_action="service-stop"
+                ;;
+            --restart)
+                wrapper_action="service-restart"
+                ;;
+            --status)
+                wrapper_action="service-status"
+                ;;
+            --enable)
+                wrapper_action="service-enable"
+                ;;
+            --disable)
+                wrapper_action="service-disable"
+                ;;
+            --logs)
+                wrapper_action="service-logs"
+                ;;
+            --debug)
+                export DEBUG=1
+                python_args+=("$arg")
+                ;;
+            *)
+                python_args+=("$arg")
+                ;;
+        esac
+    done
+    
+    # Setup environment
+    setup_environment
+    
+    # Handle wrapper-specific actions
+    if [[ -n "$wrapper_action" ]]; then
+        case "$wrapper_action" in
+            init-db)
+                init_database
+                exit $?
+                ;;
+            migrate-db)
+                migrate_database
+                exit $?
+                ;;
+            check-db)
+                check_database
+                exit $?
+                ;;
+            generate-secret)
+                generate_secret
+                exit $?
+                ;;
+            service-*)
+                local service_action="${wrapper_action#service-}"
+                manage_service "$service_action"
+                exit $?
+                ;;
+        esac
+    fi
+    
+    # Quick dependency check (only for critical dependencies)
+    if ! check_python_version; then
+        log_error "Python version check failed"
+        exit 6
+    fi
+    
+    # Check for FastAPI and uvicorn (required for server)
+    if ! python3 -c "import fastapi, uvicorn" >/dev/null 2>&1; then
+        log_error "FastAPI and uvicorn are required but not available"
+        log_error "Please install: pacman -S python-fastapi python-uvicorn"
+        exit 6
+    fi
+    
+    # Execute the Python module
+    execute_python_module "${python_args[@]}"
+}
+
+# Execute main function with all arguments
+main "$@"

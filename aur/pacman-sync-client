@@ -1,0 +1,485 @@
+#!/bin/bash
+#
+# Pacman Sync Utility Client Wrapper Script
+# 
+# This script provides a wrapper for the pacman-sync-utility client component,
+# handling environment setup, dependency checking, and proper Python module execution.
+#
+# Installation: This script should be installed to /usr/bin/pacman-sync-client
+# Usage: pacman-sync-client [options]
+#
+
+set -euo pipefail
+
+# Script metadata
+SCRIPT_NAME="pacman-sync-client"
+SCRIPT_VERSION="1.0.0"
+PYTHON_MODULE="client.main"
+
+# Default paths and configuration
+DEFAULT_CONFIG_DIR="/etc/pacman-sync-utility"
+DEFAULT_USER_CONFIG_DIR="$HOME/.config/pacman-sync-utility"
+DEFAULT_LOG_DIR="/var/log/pacman-sync-utility"
+DEFAULT_USER_LOG_DIR="$HOME/.local/share/pacman-sync-utility/logs"
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Logging functions
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1" >&2
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1" >&2
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+}
+
+log_debug() {
+    if [[ "${DEBUG:-0}" == "1" ]]; then
+        echo -e "${BLUE}[DEBUG]${NC} $1" >&2
+    fi
+}
+
+# Function to show usage information
+show_usage() {
+    cat << EOF
+Usage: $SCRIPT_NAME [options]
+
+Pacman Sync Utility Client - Desktop client with Qt UI and system tray integration
+
+OPERATION MODES:
+  (no options)          Run in GUI mode with system tray integration
+  --status              Show current sync status and exit
+  --sync                Sync to latest pool state and exit
+  --set-latest          Set current state as pool latest and exit
+  --revert              Revert to previous state and exit
+
+CONFIGURATION:
+  --config FILE         Path to configuration file
+  --server-url URL      Override server URL
+  --endpoint-name NAME  Override endpoint name
+  --pool-id ID          Override pool ID
+
+OUTPUT FORMAT:
+  --json                Output status in JSON format (for WayBar)
+  --verbose, -v         Enable verbose output
+  --quiet, -q           Suppress non-error output
+
+WAYBAR INTEGRATION:
+  --waybar-click BUTTON Handle WayBar click action (left|right|middle|scroll_up|scroll_down)
+  --waybar-action ACTION Specific action for WayBar click (sync|set_latest|revert|show_status|show_menu|refresh)
+  --waybar-daemon       Run as WayBar daemon with continuous status updates
+  --waybar-config       Output WayBar configuration template
+
+ADVANCED OPTIONS:
+  --timeout SECONDS     Operation timeout in seconds (default: 60)
+  --force               Force operation even if status is stale
+  --no-persist          Don't update persistent status
+
+DEBUG OPTIONS:
+  --debug               Enable debug logging
+  --log-file FILE       Log to file instead of console
+
+WRAPPER OPTIONS:
+  --help, -h            Show this help message
+  --version             Show version information
+  --check-deps          Check for required dependencies
+  --env-info            Show environment information
+
+EXAMPLES:
+  $SCRIPT_NAME                    # Run in GUI mode with system tray
+  $SCRIPT_NAME --status           # Show current sync status
+  $SCRIPT_NAME --status --json    # Show status in JSON format (for WayBar)
+  $SCRIPT_NAME --sync             # Sync to latest pool state
+  $SCRIPT_NAME --set-latest       # Set current state as pool latest
+  $SCRIPT_NAME --revert           # Revert to previous state
+
+  WayBar Integration:
+  $SCRIPT_NAME --waybar-config    # Output WayBar configuration template
+  $SCRIPT_NAME --waybar-daemon    # Run as WayBar daemon
+  $SCRIPT_NAME --waybar-click left --waybar-action sync  # Handle WayBar click
+
+EXIT CODES:
+  0   - Success
+  1   - Operation failed
+  2   - Authentication failed
+  3   - General error
+  4   - Timeout during authentication
+  5   - Timeout during operation
+  6   - Missing dependencies
+  7   - Unexpected error
+  8   - No status information available
+  9   - Status retrieval error
+  130 - Cancelled by user (Ctrl+C)
+
+For more information, see the documentation at:
+https://github.com/user/pacman-sync-utility/docs/
+EOF
+}
+
+# Function to show version information
+show_version() {
+    cat << EOF
+$SCRIPT_NAME version $SCRIPT_VERSION
+Pacman Sync Utility Client Wrapper
+
+Copyright (c) 2024 Pacman Sync Utility Project
+Licensed under the MIT License.
+
+This is free software; see the source for copying conditions.
+There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.
+EOF
+}
+
+# Function to check for required Python version
+check_python_version() {
+    log_debug "Checking Python version..."
+    
+    if ! command -v python3 >/dev/null 2>&1; then
+        log_error "Python 3 is not installed or not in PATH"
+        return 1
+    fi
+    
+    local python_version
+    python_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    
+    log_debug "Found Python version: $python_version"
+    
+    # Check if Python version is 3.8 or higher
+    if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)"; then
+        log_debug "Python version check passed"
+        return 0
+    else
+        log_error "Python 3.8 or higher is required, found: $python_version"
+        return 1
+    fi
+}
+
+# Function to check for required Python dependencies
+check_python_dependencies() {
+    log_debug "Checking Python dependencies..."
+    
+    local required_packages=(
+        "PyQt6"
+        "aiohttp"
+        "fastapi"
+        "pydantic"
+        "asyncpg"
+    )
+    
+    local missing_packages=()
+    
+    for package in "${required_packages[@]}"; do
+        log_debug "Checking for Python package: $package"
+        if ! python3 -c "import $package" >/dev/null 2>&1; then
+            # Handle special cases for package names
+            case "$package" in
+                "PyQt6")
+                    if ! python3 -c "from PyQt6.QtWidgets import QApplication" >/dev/null 2>&1; then
+                        missing_packages+=("$package")
+                    fi
+                    ;;
+                *)
+                    missing_packages+=("$package")
+                    ;;
+            esac
+        fi
+    done
+    
+    if [[ ${#missing_packages[@]} -gt 0 ]]; then
+        log_error "Missing required Python packages: ${missing_packages[*]}"
+        log_error "Please install missing packages using your package manager or pip:"
+        log_error "  pacman -S python-pyqt6 python-aiohttp python-fastapi python-pydantic python-asyncpg"
+        log_error "  or: pip install PyQt6 aiohttp fastapi pydantic asyncpg"
+        return 1
+    fi
+    
+    log_debug "All required Python dependencies are available"
+    return 0
+}
+
+# Function to check for optional dependencies
+check_optional_dependencies() {
+    log_debug "Checking optional dependencies..."
+    
+    local optional_packages=(
+        "psycopg2:PostgreSQL support"
+        "uvicorn:ASGI server support"
+        "waybar:WayBar integration"
+    )
+    
+    local missing_optional=()
+    
+    for package_info in "${optional_packages[@]}"; do
+        local package="${package_info%%:*}"
+        local description="${package_info##*:}"
+        
+        log_debug "Checking for optional package: $package"
+        
+        case "$package" in
+            "psycopg2")
+                if ! python3 -c "import psycopg2" >/dev/null 2>&1; then
+                    missing_optional+=("$package ($description)")
+                fi
+                ;;
+            "uvicorn")
+                if ! python3 -c "import uvicorn" >/dev/null 2>&1; then
+                    missing_optional+=("$package ($description)")
+                fi
+                ;;
+            "waybar")
+                if ! command -v waybar >/dev/null 2>&1; then
+                    missing_optional+=("$package ($description)")
+                fi
+                ;;
+        esac
+    done
+    
+    if [[ ${#missing_optional[@]} -gt 0 ]]; then
+        log_warn "Optional dependencies not available:"
+        for package in "${missing_optional[@]}"; do
+            log_warn "  - $package"
+        done
+        log_warn "Some features may not be available."
+    fi
+}
+
+# Function to check system requirements
+check_system_requirements() {
+    log_debug "Checking system requirements..."
+    
+    # Check for X11 or Wayland display server (required for Qt GUI)
+    if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+        log_warn "No display server detected (DISPLAY and WAYLAND_DISPLAY not set)"
+        log_warn "GUI mode may not work. Consider using CLI mode with --status, --sync, etc."
+    fi
+    
+    # Check for system tray support (for GUI mode)
+    if [[ -n "${DISPLAY:-}" ]]; then
+        log_debug "X11 display detected: $DISPLAY"
+    fi
+    
+    if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+        log_debug "Wayland display detected: $WAYLAND_DISPLAY"
+    fi
+    
+    # Check for required system directories
+    local required_dirs=(
+        "$DEFAULT_CONFIG_DIR"
+    )
+    
+    for dir in "${required_dirs[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            log_warn "System configuration directory not found: $dir"
+            log_warn "Some features may not work correctly."
+        fi
+    done
+}
+
+# Function to perform comprehensive dependency check
+check_dependencies() {
+    log_info "Performing dependency check..."
+    
+    local check_failed=0
+    
+    # Check Python version
+    if ! check_python_version; then
+        check_failed=1
+    fi
+    
+    # Check required Python dependencies
+    if ! check_python_dependencies; then
+        check_failed=1
+    fi
+    
+    # Check optional dependencies (warnings only)
+    check_optional_dependencies
+    
+    # Check system requirements (warnings only)
+    check_system_requirements
+    
+    if [[ $check_failed -eq 1 ]]; then
+        log_error "Dependency check failed. Please install missing dependencies."
+        return 1
+    fi
+    
+    log_info "Dependency check passed successfully"
+    return 0
+}
+
+# Function to show environment information
+show_env_info() {
+    cat << EOF
+Environment Information:
+========================
+
+System Information:
+  OS: $(uname -s)
+  Kernel: $(uname -r)
+  Architecture: $(uname -m)
+  
+Python Information:
+  Python Version: $(python3 --version 2>&1 || echo "Not available")
+  Python Path: $(command -v python3 || echo "Not found")
+  Python Executable: $(python3 -c "import sys; print(sys.executable)" 2>/dev/null || echo "Not available")
+
+Display Information:
+  DISPLAY: ${DISPLAY:-"Not set"}
+  WAYLAND_DISPLAY: ${WAYLAND_DISPLAY:-"Not set"}
+  XDG_SESSION_TYPE: ${XDG_SESSION_TYPE:-"Not set"}
+  XDG_CURRENT_DESKTOP: ${XDG_CURRENT_DESKTOP:-"Not set"}
+
+Configuration Paths:
+  System Config: $DEFAULT_CONFIG_DIR
+  User Config: $DEFAULT_USER_CONFIG_DIR
+  System Logs: $DEFAULT_LOG_DIR
+  User Logs: $DEFAULT_USER_LOG_DIR
+
+Environment Variables:
+  HOME: ${HOME:-"Not set"}
+  USER: ${USER:-"Not set"}
+  PATH: ${PATH:-"Not set"}
+  PYTHONPATH: ${PYTHONPATH:-"Not set"}
+
+Package Information:
+  Script: $SCRIPT_NAME
+  Version: $SCRIPT_VERSION
+  Module: $PYTHON_MODULE
+EOF
+}
+
+# Function to setup environment variables
+setup_environment() {
+    log_debug "Setting up environment..."
+    
+    # Set up Python path to include the project root
+    # This assumes the client module is installed as a Python package
+    # If running from source, we might need to adjust PYTHONPATH
+    
+    # Set default configuration paths if not already set
+    export PACMAN_SYNC_CONFIG_DIR="${PACMAN_SYNC_CONFIG_DIR:-$DEFAULT_CONFIG_DIR}"
+    export PACMAN_SYNC_USER_CONFIG_DIR="${PACMAN_SYNC_USER_CONFIG_DIR:-$DEFAULT_USER_CONFIG_DIR}"
+    export PACMAN_SYNC_LOG_DIR="${PACMAN_SYNC_LOG_DIR:-$DEFAULT_LOG_DIR}"
+    export PACMAN_SYNC_USER_LOG_DIR="${PACMAN_SYNC_USER_LOG_DIR:-$DEFAULT_USER_LOG_DIR}"
+    
+    # Create user directories if they don't exist
+    mkdir -p "$PACMAN_SYNC_USER_CONFIG_DIR" 2>/dev/null || true
+    mkdir -p "$PACMAN_SYNC_USER_LOG_DIR" 2>/dev/null || true
+    
+    # Set up Qt environment for better integration
+    export QT_QPA_PLATFORM_PLUGIN_PATH="${QT_QPA_PLATFORM_PLUGIN_PATH:-}"
+    
+    # Enable Qt scaling for high DPI displays
+    export QT_AUTO_SCREEN_SCALE_FACTOR="${QT_AUTO_SCREEN_SCALE_FACTOR:-1}"
+    
+    log_debug "Environment setup completed"
+}
+
+# Function to handle script interruption
+cleanup() {
+    local exit_code=$?
+    log_debug "Cleanup function called with exit code: $exit_code"
+    
+    # Kill any background processes if needed
+    # (Currently not needed, but placeholder for future use)
+    
+    exit $exit_code
+}
+
+# Function to execute the Python module
+execute_python_module() {
+    log_debug "Executing Python module: $PYTHON_MODULE"
+    log_debug "Arguments: $*"
+    
+    # Execute the Python module with all arguments passed through
+    exec python3 -m "$PYTHON_MODULE" "$@"
+}
+
+# Main function
+main() {
+    # Set up signal handlers
+    trap cleanup EXIT INT TERM
+    
+    # Parse wrapper-specific arguments first
+    local python_args=()
+    local skip_next=0
+    
+    for arg in "$@"; do
+        if [[ $skip_next -eq 1 ]]; then
+            skip_next=0
+            continue
+        fi
+        
+        case "$arg" in
+            --help|-h)
+                show_usage
+                exit 0
+                ;;
+            --version)
+                show_version
+                exit 0
+                ;;
+            --check-deps)
+                check_dependencies
+                exit $?
+                ;;
+            --env-info)
+                show_env_info
+                exit 0
+                ;;
+            --debug)
+                export DEBUG=1
+                python_args+=("$arg")
+                ;;
+            *)
+                python_args+=("$arg")
+                ;;
+        esac
+    done
+    
+    # Setup environment
+    setup_environment
+    
+    # Quick dependency check (only for critical dependencies)
+    if ! check_python_version; then
+        log_error "Python version check failed"
+        exit 6
+    fi
+    
+    # Check for PyQt6 (required for GUI mode)
+    # Only check if not running in CLI-only mode
+    local cli_mode=0
+    for arg in "${python_args[@]}"; do
+        case "$arg" in
+            --status|--sync|--set-latest|--revert|--waybar-*)
+                cli_mode=1
+                break
+                ;;
+        esac
+    done
+    
+    if [[ $cli_mode -eq 0 ]]; then
+        # GUI mode - check for PyQt6
+        if ! python3 -c "from PyQt6.QtWidgets import QApplication" >/dev/null 2>&1; then
+            log_error "PyQt6 is required for GUI mode but not available"
+            log_error "Please install PyQt6: pacman -S python-pyqt6"
+            log_error "Or use CLI mode with --status, --sync, etc."
+            exit 6
+        fi
+    fi
+    
+    # Execute the Python module
+    execute_python_module "${python_args[@]}"
+}
+
+# Execute main function with all arguments
+main "$@"

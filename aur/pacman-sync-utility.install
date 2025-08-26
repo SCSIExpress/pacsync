@@ -7,12 +7,40 @@ post_install() {
     # Create necessary directories using systemd-tmpfiles
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/pacman-sync-utility.conf
     
+    # Set proper permissions on configuration directory
+    echo "Setting up configuration directory permissions..."
+    chown root:root /etc/pacman-sync-utility
+    chmod 755 /etc/pacman-sync-utility
+    
+    # Set proper permissions on configuration files
+    chown root:root /etc/pacman-sync-utility/*.conf
+    chmod 644 /etc/pacman-sync-utility/*.conf
+    
+    # Create conf.d directory for additional configuration files
+    if [ ! -d /etc/pacman-sync-utility/conf.d ]; then
+        mkdir -p /etc/pacman-sync-utility/conf.d
+        chown root:root /etc/pacman-sync-utility/conf.d
+        chmod 755 /etc/pacman-sync-utility/conf.d
+    fi
+    
     # Generate JWT secret key if it doesn't exist
     if [ ! -f /etc/pacman-sync-utility/jwt-secret ]; then
         echo "Generating JWT secret key..."
         openssl rand -hex 32 > /etc/pacman-sync-utility/jwt-secret
         chmod 600 /etc/pacman-sync-utility/jwt-secret
         chown pacman-sync:pacman-sync /etc/pacman-sync-utility/jwt-secret
+    fi
+    
+    # Update server configuration with generated JWT secret
+    if [ -f /etc/pacman-sync-utility/server.conf ] && [ -f /etc/pacman-sync-utility/jwt-secret ]; then
+        JWT_SECRET=$(cat /etc/pacman-sync-utility/jwt-secret)
+        sed -i "s/CHANGE_THIS_SECRET_KEY_ON_INSTALL/$JWT_SECRET/" /etc/pacman-sync-utility/server.conf
+    fi
+    
+    # Validate configuration installation
+    echo "Validating configuration files..."
+    if command -v pacman-sync-validate-config >/dev/null 2>&1; then
+        pacman-sync-validate-config || echo "Configuration validation completed with warnings"
     fi
     
     # Initialize database
@@ -31,14 +59,19 @@ post_install() {
     echo ""
     echo "Pacman Sync Utility has been installed successfully!"
     echo ""
+    echo "Configuration files:"
+    echo "  /etc/pacman-sync-utility/client.conf  - Client configuration"
+    echo "  /etc/pacman-sync-utility/server.conf  - Server configuration"
+    echo "  /etc/pacman-sync-utility/pools.conf   - Pool definitions"
+    echo ""
     echo "To start the server:"
     echo "  sudo systemctl enable --now pacman-sync-server"
     echo ""
     echo "To start the client for your user:"
     echo "  systemctl --user enable --now pacman-sync-client"
     echo ""
-    echo "Configuration files are located in /etc/pacman-sync-utility/"
-    echo "Server logs will be written to /var/log/pacman-sync-utility/"
+    echo "Configuration templates and examples are available in:"
+    echo "  /usr/share/doc/pacman-sync-utility/examples/"
     echo ""
 }
 
@@ -50,6 +83,53 @@ post_upgrade() {
     
     # Update directories and permissions
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/pacman-sync-utility.conf
+    
+    # Set proper permissions on configuration directory and files
+    echo "Updating configuration directory permissions..."
+    chown root:root /etc/pacman-sync-utility
+    chmod 755 /etc/pacman-sync-utility
+    
+    # Update permissions on existing configuration files
+    if [ -f /etc/pacman-sync-utility/client.conf ]; then
+        chown root:root /etc/pacman-sync-utility/client.conf
+        chmod 644 /etc/pacman-sync-utility/client.conf
+    fi
+    
+    if [ -f /etc/pacman-sync-utility/server.conf ]; then
+        chown root:root /etc/pacman-sync-utility/server.conf
+        chmod 644 /etc/pacman-sync-utility/server.conf
+    fi
+    
+    if [ -f /etc/pacman-sync-utility/pools.conf ]; then
+        chown root:root /etc/pacman-sync-utility/pools.conf
+        chmod 644 /etc/pacman-sync-utility/pools.conf
+    fi
+    
+    # Create conf.d directory if it doesn't exist
+    if [ ! -d /etc/pacman-sync-utility/conf.d ]; then
+        mkdir -p /etc/pacman-sync-utility/conf.d
+        chown root:root /etc/pacman-sync-utility/conf.d
+        chmod 755 /etc/pacman-sync-utility/conf.d
+    fi
+    
+    # Handle JWT secret key for upgrades
+    if [ -f /etc/pacman-sync-utility/jwt-secret ]; then
+        chown pacman-sync:pacman-sync /etc/pacman-sync-utility/jwt-secret
+        chmod 600 /etc/pacman-sync-utility/jwt-secret
+    else
+        echo "Generating JWT secret key..."
+        openssl rand -hex 32 > /etc/pacman-sync-utility/jwt-secret
+        chmod 600 /etc/pacman-sync-utility/jwt-secret
+        chown pacman-sync:pacman-sync /etc/pacman-sync-utility/jwt-secret
+    fi
+    
+    # Check for .pacnew files and notify user
+    for conf_file in client.conf server.conf pools.conf; do
+        if [ -f "/etc/pacman-sync-utility/${conf_file}.pacnew" ]; then
+            echo "WARNING: New configuration file available: /etc/pacman-sync-utility/${conf_file}.pacnew"
+            echo "Please review and merge changes manually."
+        fi
+    done
     
     # Run database migrations
     echo "Running database migrations..."
@@ -108,13 +188,36 @@ post_remove() {
     # Update icon cache
     gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
     
+    # Check for .pacsave files and notify user
     echo ""
     echo "Pacman Sync Utility has been removed."
     echo ""
-    echo "Configuration files have been preserved in /etc/pacman-sync-utility/"
-    echo "Database and logs have been preserved in /var/lib/pacman-sync-utility/ and /var/log/pacman-sync-utility/"
+    
+    pacsave_found=false
+    for conf_file in client.conf server.conf pools.conf; do
+        if [ -f "/etc/pacman-sync-utility/${conf_file}.pacsave" ]; then
+            if [ "$pacsave_found" = false ]; then
+                echo "Configuration backup files (.pacsave) have been created:"
+                pacsave_found=true
+            fi
+            echo "  /etc/pacman-sync-utility/${conf_file}.pacsave"
+        fi
+    done
+    
+    if [ "$pacsave_found" = true ]; then
+        echo ""
+        echo "These files contain your custom configuration and can be restored"
+        echo "by renaming them (remove the .pacsave extension) if you reinstall."
+        echo ""
+    fi
+    
+    echo "Other preserved files:"
+    echo "  Configuration directory: /etc/pacman-sync-utility/"
+    echo "  Database and logs: /var/lib/pacman-sync-utility/"
+    echo "  System logs: /var/log/pacman-sync-utility/"
+    echo ""
     echo "To completely remove all data, run:"
     echo "  sudo rm -rf /etc/pacman-sync-utility /var/lib/pacman-sync-utility /var/log/pacman-sync-utility"
-    echo "  sudo userdel pacman-sync"
+    echo "  sudo userdel pacman-sync 2>/dev/null || true"
     echo ""
 }

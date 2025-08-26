@@ -1,0 +1,743 @@
+#!/bin/bash
+#
+# Pacman Sync Utility CLI Wrapper Script
+# 
+# This script provides a command-line interface wrapper for the pacman-sync-utility,
+# offering unified access to both client and server operations through a single CLI.
+# It handles argument forwarding, help text integration, and compatibility with
+# existing CLI interfaces.
+#
+# Installation: This script should be installed to /usr/bin/pacman-sync-cli
+# Usage: pacman-sync-cli [command] [options]
+#
+
+set -euo pipefail
+
+# Script metadata
+SCRIPT_NAME="pacman-sync-cli"
+SCRIPT_VERSION="1.0.0"
+CLIENT_MODULE="client.main"
+SERVER_MODULE="server.main"
+
+# Default paths and configuration
+DEFAULT_CONFIG_DIR="/etc/pacman-sync-utility"
+DEFAULT_USER_CONFIG_DIR="$HOME/.config/pacman-sync-utility"
+DEFAULT_LOG_DIR="/var/log/pacman-sync-utility"
+DEFAULT_USER_LOG_DIR="$HOME/.local/share/pacman-sync-utility/logs"
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Logging functions
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1" >&2
+}
+
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1" >&2
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+}
+
+log_debug() {
+    if [[ "${DEBUG:-0}" == "1" ]]; then
+        echo -e "${BLUE}[DEBUG]${NC} $1" >&2
+    fi
+}
+
+# Function to show usage information
+show_usage() {
+    cat << EOF
+Usage: $SCRIPT_NAME <command> [options]
+
+Pacman Sync Utility CLI - Unified command-line interface for client and server operations
+
+COMMANDS:
+  Client Operations:
+    status              Show current sync status
+    sync                Sync to latest pool state
+    set-latest          Set current state as pool latest
+    revert              Revert to previous state
+    
+  Server Operations:
+    server-status       Show server status and health
+    server-start        Start server (requires systemd)
+    server-stop         Stop server (requires systemd)
+    server-restart      Restart server (requires systemd)
+    
+  Database Operations:
+    db-init             Initialize database
+    db-migrate          Run database migrations
+    db-status           Show database migration status
+    db-backup FILE      Backup database to file
+    db-restore FILE     Restore database from file
+    
+  Pool Management:
+    pools               List all pools
+    pool-create NAME    Create new pool
+    pool-delete ID      Delete pool by ID
+    pool-assign ID      Assign endpoint to pool
+    
+  Endpoint Management:
+    endpoints           List all endpoints
+    endpoint-register   Register this endpoint
+    endpoint-delete ID  Delete endpoint by ID
+    
+  Configuration:
+    config-show         Show current configuration
+    config-validate     Validate configuration files
+    config-generate     Generate default configuration
+    
+  Utility:
+    health              Check system health
+    version             Show version information
+    help                Show this help message
+
+GLOBAL OPTIONS:
+  --config FILE         Path to configuration file
+  --server-url URL      Override server URL
+  --endpoint-name NAME  Override endpoint name
+  --pool-id ID          Override pool ID
+  --json                Output in JSON format
+  --verbose, -v         Enable verbose output
+  --quiet, -q           Suppress non-error output
+  --debug               Enable debug logging
+  --log-file FILE       Log to file instead of console
+  --timeout SECONDS     Operation timeout in seconds
+  --force               Force operation even if risky
+  --help, -h            Show this help message
+
+CLIENT-SPECIFIC OPTIONS (for client operations):
+  --waybar-click BUTTON Handle WayBar click action
+  --waybar-action ACTION Specific action for WayBar click
+  --waybar-daemon       Run as WayBar daemon
+  --waybar-config       Output WayBar configuration template
+  --no-persist          Don't update persistent status
+
+SERVER-SPECIFIC OPTIONS (for server operations):
+  --host HOST           Override server host
+  --port PORT           Override server port
+  --database-url URL    Override database URL
+  --log-level LEVEL     Override log level
+  --daemon              Run server as daemon
+  --environment ENV     Set environment (development|production)
+
+EXAMPLES:
+  # Client operations
+  $SCRIPT_NAME status                    # Show sync status
+  $SCRIPT_NAME status --json             # Show status in JSON format
+  $SCRIPT_NAME sync                      # Sync to latest state
+  $SCRIPT_NAME set-latest                # Set current as latest
+  $SCRIPT_NAME revert                    # Revert to previous state
+  
+  # Server operations
+  $SCRIPT_NAME server-status             # Show server health
+  $SCRIPT_NAME server-start              # Start server service
+  $SCRIPT_NAME db-init                   # Initialize database
+  $SCRIPT_NAME db-migrate                # Run migrations
+  
+  # Pool management
+  $SCRIPT_NAME pools                     # List all pools
+  $SCRIPT_NAME pool-create "Development" # Create new pool
+  $SCRIPT_NAME pool-assign 1             # Assign to pool ID 1
+  
+  # Endpoint management
+  $SCRIPT_NAME endpoints                 # List endpoints
+  $SCRIPT_NAME endpoint-register         # Register this endpoint
+  
+  # Configuration
+  $SCRIPT_NAME config-show               # Show configuration
+  $SCRIPT_NAME config-validate           # Validate config files
+  $SCRIPT_NAME health                    # Check system health
+
+EXIT CODES:
+  0   - Success
+  1   - Operation failed
+  2   - Authentication failed
+  3   - Configuration error
+  4   - Permission error
+  5   - Service management error
+  6   - Missing dependencies
+  7   - Unexpected error
+  8   - Database error
+  9   - Network error
+  10  - Invalid command or arguments
+  130 - Cancelled by user (Ctrl+C)
+
+For more information, see the documentation at:
+https://github.com/user/pacman-sync-utility/docs/
+EOF
+}
+
+# Function to show version information
+show_version() {
+    cat << EOF
+$SCRIPT_NAME version $SCRIPT_VERSION
+Pacman Sync Utility CLI Wrapper
+
+Copyright (c) 2024 Pacman Sync Utility Project
+Licensed under the MIT License.
+
+This is free software; see the source for copying conditions.
+There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.
+
+Components:
+  Client Module: $CLIENT_MODULE
+  Server Module: $SERVER_MODULE
+EOF
+}
+
+# Function to check for required Python version
+check_python_version() {
+    log_debug "Checking Python version..."
+    
+    if ! command -v python3 >/dev/null 2>&1; then
+        log_error "Python 3 is not installed or not in PATH"
+        return 1
+    fi
+    
+    local python_version
+    python_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+    
+    log_debug "Found Python version: $python_version"
+    
+    # Check if Python version is 3.8 or higher
+    if python3 -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)"; then
+        log_debug "Python version check passed"
+        return 0
+    else
+        log_error "Python 3.8 or higher is required, found: $python_version"
+        return 1
+    fi
+}
+
+# Function to check for required Python dependencies based on command
+check_command_dependencies() {
+    local command="$1"
+    log_debug "Checking dependencies for command: $command"
+    
+    case "$command" in
+        status|sync|set-latest|revert|waybar-*|endpoint-register)
+            # Client operations - check for client dependencies
+            local client_packages=("aiohttp" "fastapi" "pydantic")
+            for package in "${client_packages[@]}"; do
+                if ! python3 -c "import $package" >/dev/null 2>&1; then
+                    log_error "Missing required Python package for client operations: $package"
+                    return 1
+                fi
+            done
+            ;;
+        server-*|db-*|pools|pool-*|endpoints|endpoint-delete)
+            # Server operations - check for server dependencies
+            local server_packages=("fastapi" "uvicorn" "aiohttp" "pydantic" "asyncpg" "aiosqlite")
+            for package in "${server_packages[@]}"; do
+                if ! python3 -c "import $package" >/dev/null 2>&1; then
+                    log_error "Missing required Python package for server operations: $package"
+                    return 1
+                fi
+            done
+            ;;
+        config-*|health|version|help)
+            # Utility operations - minimal dependencies
+            ;;
+    esac
+    
+    return 0
+}
+
+# Function to setup environment variables
+setup_environment() {
+    log_debug "Setting up environment..."
+    
+    # Set up Python path to include the project root
+    # This assumes the modules are installed as Python packages
+    
+    # Set default configuration paths if not already set
+    export PACMAN_SYNC_CONFIG_DIR="${PACMAN_SYNC_CONFIG_DIR:-$DEFAULT_CONFIG_DIR}"
+    export PACMAN_SYNC_USER_CONFIG_DIR="${PACMAN_SYNC_USER_CONFIG_DIR:-$DEFAULT_USER_CONFIG_DIR}"
+    export PACMAN_SYNC_LOG_DIR="${PACMAN_SYNC_LOG_DIR:-$DEFAULT_LOG_DIR}"
+    export PACMAN_SYNC_USER_LOG_DIR="${PACMAN_SYNC_USER_LOG_DIR:-$DEFAULT_USER_LOG_DIR}"
+    
+    # Create user directories if they don't exist
+    mkdir -p "$PACMAN_SYNC_USER_CONFIG_DIR" 2>/dev/null || true
+    mkdir -p "$PACMAN_SYNC_USER_LOG_DIR" 2>/dev/null || true
+    
+    log_debug "Environment setup completed"
+}
+
+# Function to execute client operations
+execute_client_operation() {
+    local command="$1"
+    shift
+    local args=("$@")
+    
+    log_debug "Executing client operation: $command"
+    log_debug "Client arguments: ${args[*]}"
+    
+    # Map CLI commands to client arguments
+    case "$command" in
+        status)
+            exec python3 -m "$CLIENT_MODULE" --status "${args[@]}"
+            ;;
+        sync)
+            exec python3 -m "$CLIENT_MODULE" --sync "${args[@]}"
+            ;;
+        set-latest)
+            exec python3 -m "$CLIENT_MODULE" --set-latest "${args[@]}"
+            ;;
+        revert)
+            exec python3 -m "$CLIENT_MODULE" --revert "${args[@]}"
+            ;;
+        waybar-*)
+            # Handle WayBar operations
+            local waybar_cmd="${command#waybar-}"
+            case "$waybar_cmd" in
+                config)
+                    exec python3 -m "$CLIENT_MODULE" --waybar-config "${args[@]}"
+                    ;;
+                daemon)
+                    exec python3 -m "$CLIENT_MODULE" --waybar-daemon "${args[@]}"
+                    ;;
+                click)
+                    # Expect additional arguments for click handling
+                    exec python3 -m "$CLIENT_MODULE" --waybar-click "${args[@]}"
+                    ;;
+                *)
+                    log_error "Unknown WayBar command: $waybar_cmd"
+                    return 10
+                    ;;
+            esac
+            ;;
+        endpoint-register)
+            # Use client to register endpoint
+            exec python3 -m "$CLIENT_MODULE" --register-endpoint "${args[@]}"
+            ;;
+        *)
+            log_error "Unknown client command: $command"
+            return 10
+            ;;
+    esac
+}
+
+# Function to execute server operations
+execute_server_operation() {
+    local command="$1"
+    shift
+    local args=("$@")
+    
+    log_debug "Executing server operation: $command"
+    log_debug "Server arguments: ${args[*]}"
+    
+    # Map CLI commands to server arguments or direct operations
+    case "$command" in
+        server-status)
+            exec python3 -m "$SERVER_MODULE" --status "${args[@]}"
+            ;;
+        server-start)
+            if command -v systemctl >/dev/null 2>&1; then
+                systemctl start pacman-sync-server.service
+            else
+                log_error "systemctl not available - cannot start service"
+                return 5
+            fi
+            ;;
+        server-stop)
+            if command -v systemctl >/dev/null 2>&1; then
+                systemctl stop pacman-sync-server.service
+            else
+                log_error "systemctl not available - cannot stop service"
+                return 5
+            fi
+            ;;
+        server-restart)
+            if command -v systemctl >/dev/null 2>&1; then
+                systemctl restart pacman-sync-server.service
+            else
+                log_error "systemctl not available - cannot restart service"
+                return 5
+            fi
+            ;;
+        db-init)
+            exec python3 -m "$SERVER_MODULE" --init-db "${args[@]}"
+            ;;
+        db-migrate)
+            exec python3 -m "$SERVER_MODULE" --migrate-db "${args[@]}"
+            ;;
+        db-status)
+            exec python3 -m "$SERVER_MODULE" --db-status "${args[@]}"
+            ;;
+        db-backup)
+            exec python3 -m "$SERVER_MODULE" --db-backup "${args[@]}"
+            ;;
+        db-restore)
+            exec python3 -m "$SERVER_MODULE" --db-restore "${args[@]}"
+            ;;
+        pools)
+            exec python3 -m "$SERVER_MODULE" --list-pools "${args[@]}"
+            ;;
+        pool-create)
+            exec python3 -m "$SERVER_MODULE" --create-pool "${args[@]}"
+            ;;
+        pool-delete)
+            exec python3 -m "$SERVER_MODULE" --delete-pool "${args[@]}"
+            ;;
+        pool-assign)
+            exec python3 -m "$SERVER_MODULE" --assign-pool "${args[@]}"
+            ;;
+        endpoints)
+            exec python3 -m "$SERVER_MODULE" --list-endpoints "${args[@]}"
+            ;;
+        endpoint-delete)
+            exec python3 -m "$SERVER_MODULE" --delete-endpoint "${args[@]}"
+            ;;
+        *)
+            log_error "Unknown server command: $command"
+            return 10
+            ;;
+    esac
+}
+
+# Function to execute utility operations
+execute_utility_operation() {
+    local command="$1"
+    shift
+    local args=("$@")
+    
+    log_debug "Executing utility operation: $command"
+    
+    case "$command" in
+        config-show)
+            show_config "${args[@]}"
+            ;;
+        config-validate)
+            validate_config "${args[@]}"
+            ;;
+        config-generate)
+            generate_config "${args[@]}"
+            ;;
+        health)
+            check_system_health "${args[@]}"
+            ;;
+        version)
+            show_version
+            ;;
+        help)
+            show_usage
+            ;;
+        *)
+            log_error "Unknown utility command: $command"
+            return 10
+            ;;
+    esac
+}
+
+# Function to show current configuration
+show_config() {
+    log_info "Current Configuration:"
+    
+    local config_files=(
+        "$DEFAULT_CONFIG_DIR/server.conf"
+        "$DEFAULT_CONFIG_DIR/client.conf"
+        "$DEFAULT_USER_CONFIG_DIR/client.conf"
+    )
+    
+    for config_file in "${config_files[@]}"; do
+        if [[ -f "$config_file" ]]; then
+            echo
+            echo "=== $config_file ==="
+            if [[ -r "$config_file" ]]; then
+                cat "$config_file"
+            else
+                echo "File exists but is not readable"
+            fi
+        fi
+    done
+    
+    echo
+    echo "=== Environment Variables ==="
+    env | grep -E '^PACMAN_SYNC_|^DATABASE_|^HTTP_' | sort || true
+}
+
+# Function to validate configuration
+validate_config() {
+    log_info "Validating configuration files..."
+    
+    local validation_failed=0
+    
+    # Validate server configuration
+    local server_config="$DEFAULT_CONFIG_DIR/server.conf"
+    if [[ -f "$server_config" ]]; then
+        log_info "Validating server configuration: $server_config"
+        if python3 -c "
+import sys
+try:
+    from server.config import get_config
+    config = get_config()
+    print('Server configuration is valid')
+except Exception as e:
+    print(f'Server configuration error: {e}')
+    sys.exit(1)
+" 2>/dev/null; then
+            log_info "✓ Server configuration is valid"
+        else
+            log_error "✗ Server configuration is invalid"
+            validation_failed=1
+        fi
+    else
+        log_warn "Server configuration file not found: $server_config"
+    fi
+    
+    # Validate client configuration
+    local client_configs=(
+        "$DEFAULT_CONFIG_DIR/client.conf"
+        "$DEFAULT_USER_CONFIG_DIR/client.conf"
+    )
+    
+    for client_config in "${client_configs[@]}"; do
+        if [[ -f "$client_config" ]]; then
+            log_info "Validating client configuration: $client_config"
+            if python3 -c "
+import sys
+try:
+    from client.config import ClientConfiguration
+    config = ClientConfiguration('$client_config')
+    print('Client configuration is valid')
+except Exception as e:
+    print(f'Client configuration error: {e}')
+    sys.exit(1)
+" 2>/dev/null; then
+                log_info "✓ Client configuration is valid: $client_config"
+            else
+                log_error "✗ Client configuration is invalid: $client_config"
+                validation_failed=1
+            fi
+        fi
+    done
+    
+    if [[ $validation_failed -eq 1 ]]; then
+        log_error "Configuration validation failed"
+        return 3
+    else
+        log_info "All configuration files are valid"
+        return 0
+    fi
+}
+
+# Function to generate default configuration
+generate_config() {
+    log_info "Generating default configuration files..."
+    
+    # This would typically copy from templates
+    local template_dir="$DEFAULT_CONFIG_DIR"
+    
+    if [[ -f "$template_dir/server.conf.template" ]]; then
+        cp "$template_dir/server.conf.template" "$template_dir/server.conf"
+        log_info "Generated server configuration from template"
+    fi
+    
+    if [[ -f "$template_dir/client.conf.template" ]]; then
+        cp "$template_dir/client.conf.template" "$DEFAULT_USER_CONFIG_DIR/client.conf"
+        log_info "Generated client configuration from template"
+    fi
+    
+    log_info "Configuration generation completed"
+}
+
+# Function to check system health
+check_system_health() {
+    log_info "Checking system health..."
+    
+    local health_status=0
+    
+    # Check Python version
+    if check_python_version; then
+        log_info "✓ Python version is compatible"
+    else
+        log_error "✗ Python version check failed"
+        health_status=1
+    fi
+    
+    # Check basic dependencies
+    local basic_packages=("aiohttp" "fastapi" "pydantic")
+    for package in "${basic_packages[@]}"; do
+        if python3 -c "import $package" >/dev/null 2>&1; then
+            log_info "✓ Python package available: $package"
+        else
+            log_warn "⚠ Python package missing: $package"
+        fi
+    done
+    
+    # Check configuration files
+    local config_files=(
+        "$DEFAULT_CONFIG_DIR/server.conf"
+        "$DEFAULT_CONFIG_DIR/client.conf"
+    )
+    
+    for config_file in "${config_files[@]}"; do
+        if [[ -f "$config_file" ]]; then
+            log_info "✓ Configuration file exists: $config_file"
+        else
+            log_warn "⚠ Configuration file missing: $config_file"
+        fi
+    done
+    
+    # Check systemd service
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl is-active pacman-sync-server.service >/dev/null 2>&1; then
+            log_info "✓ Server service is running"
+        else
+            log_warn "⚠ Server service is not running"
+        fi
+    else
+        log_warn "⚠ systemctl not available - cannot check service status"
+    fi
+    
+    # Check server connectivity (if running)
+    if command -v curl >/dev/null 2>&1; then
+        if curl -s http://localhost:8000/health/live >/dev/null 2>&1; then
+            log_info "✓ Server is responding to health checks"
+        else
+            log_warn "⚠ Server is not responding (may not be running)"
+        fi
+    fi
+    
+    if [[ $health_status -eq 0 ]]; then
+        log_info "System health check completed successfully"
+    else
+        log_warn "System health check completed with warnings"
+    fi
+    
+    return $health_status
+}
+
+# Function to handle script interruption
+cleanup() {
+    local exit_code=$?
+    log_debug "Cleanup function called with exit code: $exit_code"
+    exit $exit_code
+}
+
+# Main function
+main() {
+    # Set up signal handlers
+    trap cleanup EXIT INT TERM
+    
+    # Check for minimum arguments
+    if [[ $# -eq 0 ]]; then
+        log_error "No command specified"
+        echo
+        show_usage
+        exit 10
+    fi
+    
+    # Parse global options and command
+    local command=""
+    local args=()
+    local skip_next=0
+    
+    for arg in "$@"; do
+        if [[ $skip_next -eq 1 ]]; then
+            skip_next=0
+            args+=("$arg")
+            continue
+        fi
+        
+        case "$arg" in
+            --help|-h)
+                show_usage
+                exit 0
+                ;;
+            --version)
+                show_version
+                exit 0
+                ;;
+            --debug)
+                export DEBUG=1
+                args+=("$arg")
+                ;;
+            --config|--server-url|--endpoint-name|--pool-id|--log-file|--timeout|--host|--port|--database-url|--log-level|--environment)
+                # Options that take a value
+                args+=("$arg")
+                skip_next=1
+                ;;
+            --json|--verbose|-v|--quiet|-q|--force|--daemon|--no-persist)
+                # Boolean options
+                args+=("$arg")
+                ;;
+            -*)
+                # Unknown option - pass through
+                args+=("$arg")
+                ;;
+            *)
+                # First non-option argument is the command
+                if [[ -z "$command" ]]; then
+                    command="$arg"
+                else
+                    args+=("$arg")
+                fi
+                ;;
+        esac
+    done
+    
+    # Validate command
+    if [[ -z "$command" ]]; then
+        log_error "No command specified"
+        exit 10
+    fi
+    
+    # Setup environment
+    setup_environment
+    
+    # Quick dependency check
+    if ! check_python_version; then
+        log_error "Python version check failed"
+        exit 6
+    fi
+    
+    # Check command-specific dependencies
+    if ! check_command_dependencies "$command"; then
+        log_error "Dependency check failed for command: $command"
+        exit 6
+    fi
+    
+    # Route command to appropriate handler
+    case "$command" in
+        # Client operations
+        status|sync|set-latest|revert|waybar-*|endpoint-register)
+            execute_client_operation "$command" "${args[@]}"
+            ;;
+        # Server operations
+        server-*|db-*|pools|pool-*|endpoints|endpoint-delete)
+            execute_server_operation "$command" "${args[@]}"
+            ;;
+        # Utility operations
+        config-*|health|version|help)
+            execute_utility_operation "$command" "${args[@]}"
+            ;;
+        *)
+            log_error "Unknown command: $command"
+            echo
+            echo "Available commands:"
+            echo "  Client: status, sync, set-latest, revert, endpoint-register"
+            echo "  Server: server-status, server-start, server-stop, server-restart"
+            echo "  Database: db-init, db-migrate, db-status, db-backup, db-restore"
+            echo "  Pool: pools, pool-create, pool-delete, pool-assign"
+            echo "  Endpoint: endpoints, endpoint-delete"
+            echo "  Config: config-show, config-validate, config-generate"
+            echo "  Utility: health, version, help"
+            echo
+            echo "Use '$SCRIPT_NAME help' for detailed usage information."
+            exit 10
+            ;;
+    esac
+}
+
+# Execute main function with all arguments
+main "$@"
