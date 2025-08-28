@@ -242,6 +242,25 @@ View on GitHub Container Registry:
 EOF
 }
 
+# Function to cleanup old images before building
+cleanup_old_images() {
+    print_header "Cleaning Up Old Images"
+    
+    print_status "Removing dangling images..."
+    docker image prune -f || true
+    
+    print_status "Removing old versions of our images..."
+    # Remove existing images with our tags (but keep base images)
+    docker images "${FULL_IMAGE_NAME}" --format "{{.Repository}}:{{.Tag}}" | while read -r image; do
+        if [ -n "$image" ]; then
+            print_status "Removing old image: $image"
+            docker rmi "$image" 2>/dev/null || true
+        fi
+    done
+    
+    print_success "Old images cleaned up"
+}
+
 # Function to cleanup local images (optional)
 cleanup_local() {
     if [ "$1" = "--cleanup" ]; then
@@ -308,6 +327,7 @@ main() {
     get_version_info
     
     if [ "$SKIP_BUILD" = false ]; then
+        cleanup_old_images
         build_production
         build_development
     else

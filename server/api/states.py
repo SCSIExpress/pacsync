@@ -149,30 +149,22 @@ async def submit_state(
         raise HTTPException(status_code=500, detail=f"State submission failed: {str(e)}")
 
 
-@router.get("/states/{state_id}")
-async def get_state(
-    state_id: str,
-    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator)
-):
-    """
-    Get a specific package state by ID.
-    
-    This endpoint retrieves detailed information about a specific
-    package state, including all packages and metadata.
-    """
-    try:
-        # Note: This would require implementing get_state_by_id in sync_coordinator
-        # For now, return a not implemented error
-        raise HTTPException(
-            status_code=501, 
-            detail="State retrieval by ID not yet implemented"
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting state {state_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get state: {str(e)}")
+# Health check endpoint for states service (must come before parameterized routes)
+@router.get("/states/health")
+async def states_health_check():
+    """Health check endpoint for states service."""
+    return {
+        "status": "healthy",
+        "service": "package-states",
+        "timestamp": datetime.now().isoformat(),
+        "test": "NEW_CODE_LOADED"
+    }
+
+# Test endpoint to verify hot reload (must come before parameterized routes)
+@router.get("/states/test")
+async def test_endpoint():
+    """Test endpoint to verify code changes are loaded."""
+    return {"message": "Hot reload is working!", "timestamp": datetime.now().isoformat()}
 
 
 @router.get("/states/endpoint/{endpoint_id}")
@@ -224,11 +216,30 @@ async def get_pool_states(
     in the specified pool, useful for pool management and analysis.
     """
     try:
-        # Note: This would require implementing get_pool_states in sync_coordinator
-        # For now, return a not implemented error
-        raise HTTPException(
-            status_code=501, 
-            detail="Pool state retrieval not yet implemented"
+        logger.info(f"Retrieving states for pool: {pool_id}")
+        
+        # Get all endpoints in the pool
+        from server.database.orm import EndpointRepository
+        endpoint_repo = EndpointRepository(sync_coordinator.db_manager)
+        endpoints = await endpoint_repo.list_by_pool(pool_id)
+        
+        # Get states for all endpoints in the pool
+        all_states = []
+        for endpoint in endpoints:
+            states = await sync_coordinator.state_manager.get_endpoint_states(endpoint.id, limit)
+            for state in states:
+                all_states.append(system_state_to_response(state, pool_id=pool_id))
+        
+        # Sort by creation time (most recent first)
+        all_states.sort(key=lambda x: x.created_at, reverse=True)
+        
+        # Limit results
+        limited_states = all_states[:limit]
+        
+        logger.info(f"Retrieved {len(limited_states)} states for pool: {pool_id}")
+        return StateListResponse(
+            states=limited_states,
+            total_count=len(limited_states)
         )
         
     except HTTPException:
@@ -238,12 +249,34 @@ async def get_pool_states(
         raise HTTPException(status_code=500, detail=f"Failed to get pool states: {str(e)}")
 
 
-# Health check endpoint for states service
-@router.get("/states/health")
-async def states_health_check():
-    """Health check endpoint for states service."""
-    return {
-        "status": "healthy",
-        "service": "package-states",
-        "timestamp": datetime.now().isoformat()
-    }
+@router.get("/states/{state_id}")
+async def get_state(
+    state_id: str,
+    sync_coordinator: SyncCoordinator = Depends(get_sync_coordinator)
+):
+    """
+    Get a specific package state by ID.
+    
+    This endpoint retrieves detailed information about a specific
+    package state, including all packages and metadata.
+    """
+    try:
+        logger.info(f"NEW CODE: Retrieving state: {state_id}")
+        
+        # Get the state using sync coordinator's state manager
+        state = await sync_coordinator.state_manager.get_state(state_id)
+        if not state:
+            raise HTTPException(status_code=404, detail="State not found")
+        
+        # Convert to response format
+        response = system_state_to_response(state, state_id=state_id)
+        
+        logger.info(f"Successfully retrieved state: {state_id}")
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting state {state_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get state: {str(e)}")
+    return {"message": "Hot reload is working!", "timestamp": datetime.now().isoformat()}

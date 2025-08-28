@@ -2,10 +2,26 @@ post_install() {
     echo "Setting up Pacman Sync Utility..."
     
     # Create system user and group using systemd-sysusers
+    echo "Creating system user and group..."
     systemd-sysusers /usr/lib/sysusers.d/pacman-sync-utility.conf
     
+    # Verify user creation was successful
+    if ! id pacman-sync >/dev/null 2>&1; then
+        echo "ERROR: Failed to create pacman-sync system user"
+        exit 1
+    fi
+    
     # Create necessary directories using systemd-tmpfiles
+    echo "Setting up directory structure..."
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/pacman-sync-utility.conf
+    
+    # Verify critical directories exist
+    for dir in "/var/lib/pacman-sync-utility" "/var/lib/pacman-sync-utility/database" "/var/lib/pacman-sync-utility/logs" "/var/lib/pacman-sync-utility/run" "/etc/pacman-sync-utility"; do
+        if [ ! -d "$dir" ]; then
+            echo "ERROR: Failed to create directory: $dir"
+            exit 1
+        fi
+    done
     
     # Set proper permissions on configuration directory
     echo "Setting up configuration directory permissions..."
@@ -13,8 +29,10 @@ post_install() {
     chmod 755 /etc/pacman-sync-utility
     
     # Set proper permissions on configuration files
-    chown root:root /etc/pacman-sync-utility/*.conf
-    chmod 644 /etc/pacman-sync-utility/*.conf
+    if ls /etc/pacman-sync-utility/*.conf >/dev/null 2>&1; then
+        chown root:root /etc/pacman-sync-utility/*.conf
+        chmod 644 /etc/pacman-sync-utility/*.conf
+    fi
     
     # Create conf.d directory for additional configuration files
     if [ ! -d /etc/pacman-sync-utility/conf.d ]; then
@@ -26,7 +44,19 @@ post_install() {
     # Generate JWT secret key if it doesn't exist
     if [ ! -f /etc/pacman-sync-utility/jwt-secret ]; then
         echo "Generating JWT secret key..."
-        openssl rand -hex 32 > /etc/pacman-sync-utility/jwt-secret
+        if command -v openssl >/dev/null 2>&1; then
+            openssl rand -hex 32 > /etc/pacman-sync-utility/jwt-secret
+        else
+            # Fallback if openssl is not available
+            head -c 32 /dev/urandom | xxd -p -c 32 > /etc/pacman-sync-utility/jwt-secret
+        fi
+        
+        # Verify secret was generated
+        if [ ! -s /etc/pacman-sync-utility/jwt-secret ]; then
+            echo "ERROR: Failed to generate JWT secret key"
+            exit 1
+        fi
+        
         chmod 600 /etc/pacman-sync-utility/jwt-secret
         chown pacman-sync:pacman-sync /etc/pacman-sync-utility/jwt-secret
     fi
@@ -34,7 +64,9 @@ post_install() {
     # Update server configuration with generated JWT secret
     if [ -f /etc/pacman-sync-utility/server.conf ] && [ -f /etc/pacman-sync-utility/jwt-secret ]; then
         JWT_SECRET=$(cat /etc/pacman-sync-utility/jwt-secret)
-        sed -i "s/CHANGE_THIS_SECRET_KEY_ON_INSTALL/$JWT_SECRET/" /etc/pacman-sync-utility/server.conf
+        if [ -n "$JWT_SECRET" ]; then
+            sed -i "s/CHANGE_THIS_SECRET_KEY_ON_INSTALL/$JWT_SECRET/" /etc/pacman-sync-utility/server.conf
+        fi
     fi
     
     # Validate configuration installation
@@ -45,24 +77,41 @@ post_install() {
     
     # Initialize database
     echo "Initializing database..."
-    sudo -u pacman-sync /usr/bin/pacman-sync-server --init-db 2>/dev/null || echo "Database initialization skipped (may already exist)"
+    if command -v /usr/bin/pacman-sync-server >/dev/null 2>&1; then
+        sudo -u pacman-sync /usr/bin/pacman-sync-server --init-db 2>/dev/null || echo "Database initialization skipped (may already exist)"
+    else
+        echo "Warning: pacman-sync-server not found, database initialization skipped"
+    fi
     
-    # Reload systemd daemon
+    # Reload systemd daemon to recognize new service files
+    echo "Reloading systemd daemon..."
     systemctl daemon-reload
     
-    # Update desktop database
-    update-desktop-database -q
+    # Update desktop database for application menu integration
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q
+    fi
     
-    # Update icon cache
-    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+    # Update icon cache for proper icon display
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+    fi
     
     echo ""
-    echo "Pacman Sync Utility has been installed successfully!"
+    echo "✓ Pacman Sync Utility has been installed successfully!"
     echo ""
     echo "Configuration files:"
     echo "  /etc/pacman-sync-utility/client.conf  - Client configuration"
     echo "  /etc/pacman-sync-utility/server.conf  - Server configuration"
     echo "  /etc/pacman-sync-utility/pools.conf   - Pool definitions"
+    echo ""
+    echo "System user created:"
+    echo "  pacman-sync - Server process user"
+    echo ""
+    echo "Data directories:"
+    echo "  /var/lib/pacman-sync-utility/database/ - Database files"
+    echo "  /var/lib/pacman-sync-utility/logs/     - Log files"
+    echo "  /var/lib/pacman-sync-utility/run/      - Runtime files"
     echo ""
     echo "To start the server:"
     echo "  sudo systemctl enable --now pacman-sync-server"
@@ -78,11 +127,43 @@ post_install() {
 post_upgrade() {
     echo "Upgrading Pacman Sync Utility..."
     
+    # Create upgrade timestamp for rollback tracking
+    UPGRADE_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_DIR="/var/lib/pacman-sync-utility/backups/upgrade_${UPGRADE_TIMESTAMP}"
+    
     # Ensure system user exists (in case upgrading from older version)
     systemd-sysusers /usr/lib/sysusers.d/pacman-sync-utility.conf
     
     # Update directories and permissions
     systemd-tmpfiles --create /usr/lib/tmpfiles.d/pacman-sync-utility.conf
+    
+    # Create backup directory for this upgrade
+    echo "Creating upgrade backup..."
+    mkdir -p "$BACKUP_DIR"/{config,database,logs}
+    chown -R pacman-sync:pacman-sync "$BACKUP_DIR"
+    chmod 750 "$BACKUP_DIR"
+    
+    # Backup existing configuration files
+    echo "Backing up configuration files..."
+    for conf_file in client.conf server.conf pools.conf jwt-secret; do
+        if [ -f "/etc/pacman-sync-utility/$conf_file" ]; then
+            cp "/etc/pacman-sync-utility/$conf_file" "$BACKUP_DIR/config/" 2>/dev/null || true
+        fi
+    done
+    
+    # Backup database before migration
+    echo "Backing up database..."
+    if [ -d /var/lib/pacman-sync-utility/database ]; then
+        cp -r /var/lib/pacman-sync-utility/database/* "$BACKUP_DIR/database/" 2>/dev/null || true
+    fi
+    
+    # Record current service states for rollback
+    echo "Recording service states..."
+    {
+        echo "# Service states before upgrade - $(date)"
+        echo "SERVER_WAS_ACTIVE=$(systemctl is-active --quiet pacman-sync-server && echo 'true' || echo 'false')"
+        echo "SERVER_WAS_ENABLED=$(systemctl is-enabled --quiet pacman-sync-server && echo 'true' || echo 'false')"
+    } > "$BACKUP_DIR/service_states.sh"
     
     # Set proper permissions on configuration directory and files
     echo "Updating configuration directory permissions..."
@@ -90,20 +171,12 @@ post_upgrade() {
     chmod 755 /etc/pacman-sync-utility
     
     # Update permissions on existing configuration files
-    if [ -f /etc/pacman-sync-utility/client.conf ]; then
-        chown root:root /etc/pacman-sync-utility/client.conf
-        chmod 644 /etc/pacman-sync-utility/client.conf
-    fi
-    
-    if [ -f /etc/pacman-sync-utility/server.conf ]; then
-        chown root:root /etc/pacman-sync-utility/server.conf
-        chmod 644 /etc/pacman-sync-utility/server.conf
-    fi
-    
-    if [ -f /etc/pacman-sync-utility/pools.conf ]; then
-        chown root:root /etc/pacman-sync-utility/pools.conf
-        chmod 644 /etc/pacman-sync-utility/pools.conf
-    fi
+    for conf_file in client.conf server.conf pools.conf; do
+        if [ -f "/etc/pacman-sync-utility/$conf_file" ]; then
+            chown root:root "/etc/pacman-sync-utility/$conf_file"
+            chmod 644 "/etc/pacman-sync-utility/$conf_file"
+        fi
+    done
     
     # Create conf.d directory if it doesn't exist
     if [ ! -d /etc/pacman-sync-utility/conf.d ]; then
@@ -118,44 +191,217 @@ post_upgrade() {
         chmod 600 /etc/pacman-sync-utility/jwt-secret
     else
         echo "Generating JWT secret key..."
-        openssl rand -hex 32 > /etc/pacman-sync-utility/jwt-secret
+        if command -v openssl >/dev/null 2>&1; then
+            openssl rand -hex 32 > /etc/pacman-sync-utility/jwt-secret
+        else
+            # Fallback if openssl is not available
+            head -c 32 /dev/urandom | xxd -p -c 32 > /etc/pacman-sync-utility/jwt-secret
+        fi
         chmod 600 /etc/pacman-sync-utility/jwt-secret
         chown pacman-sync:pacman-sync /etc/pacman-sync-utility/jwt-secret
     fi
     
-    # Check for .pacnew files and notify user
+    # Check for .pacnew files and provide merge assistance
+    PACNEW_FOUND=false
     for conf_file in client.conf server.conf pools.conf; do
         if [ -f "/etc/pacman-sync-utility/${conf_file}.pacnew" ]; then
-            echo "WARNING: New configuration file available: /etc/pacman-sync-utility/${conf_file}.pacnew"
-            echo "Please review and merge changes manually."
+            if [ "$PACNEW_FOUND" = false ]; then
+                echo ""
+                echo "=== Configuration Update Required ==="
+                PACNEW_FOUND=true
+            fi
+            echo "New configuration available: /etc/pacman-sync-utility/${conf_file}.pacnew"
+            
+            # Provide basic merge assistance
+            if command -v diff >/dev/null 2>&1; then
+                echo "Changes in new configuration:"
+                diff -u "/etc/pacman-sync-utility/${conf_file}" "/etc/pacman-sync-utility/${conf_file}.pacnew" 2>/dev/null || true
+                echo ""
+            fi
         fi
     done
     
-    # Run database migrations
-    echo "Running database migrations..."
-    sudo -u pacman-sync /usr/bin/pacman-sync-server --migrate-db 2>/dev/null || echo "Database migration completed or not needed"
-    
-    # Reload systemd daemon
-    systemctl daemon-reload
-    
-    # Update desktop database
-    update-desktop-database -q
-    
-    # Update icon cache
-    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
-    
-    # Restart services if they are running
-    if systemctl is-active --quiet pacman-sync-server; then
-        echo "Restarting server service..."
-        systemctl restart pacman-sync-server
+    if [ "$PACNEW_FOUND" = true ]; then
+        echo "Please review and merge changes manually."
+        echo "Original files are backed up in: $BACKUP_DIR/config/"
+        echo ""
     fi
     
-    # Note: User services need to be restarted manually by each user
+    # Stop services gracefully before database migration
+    SERVER_WAS_RUNNING=false
+    if systemctl is-active --quiet pacman-sync-server; then
+        echo "Stopping server service for database migration..."
+        systemctl stop pacman-sync-server
+        SERVER_WAS_RUNNING=true
+        
+        # Wait for graceful shutdown
+        sleep 2
+        
+        # Verify service stopped
+        if systemctl is-active --quiet pacman-sync-server; then
+            echo "Warning: Server service did not stop gracefully"
+        fi
+    fi
+    
+    # Run database migrations with error handling and rollback capability
+    echo "Running database migrations..."
+    MIGRATION_SUCCESS=false
+    
+    if command -v /usr/bin/pacman-sync-server >/dev/null 2>&1; then
+        # Test database connectivity first
+        if sudo -u pacman-sync /usr/bin/pacman-sync-server --test-db 2>/dev/null; then
+            # Run migration with detailed logging
+            if sudo -u pacman-sync /usr/bin/pacman-sync-server --migrate-db --verbose 2>&1 | tee "$BACKUP_DIR/migration.log"; then
+                MIGRATION_SUCCESS=true
+                echo "Database migration completed successfully"
+            else
+                echo "ERROR: Database migration failed!"
+                echo "Migration log saved to: $BACKUP_DIR/migration.log"
+                
+                # Attempt automatic rollback
+                echo "Attempting automatic database rollback..."
+                if [ -d "$BACKUP_DIR/database" ] && [ "$(ls -A "$BACKUP_DIR/database")" ]; then
+                    # Stop any running processes
+                    systemctl stop pacman-sync-server 2>/dev/null || true
+                    
+                    # Restore database backup
+                    rm -rf /var/lib/pacman-sync-utility/database/*
+                    cp -r "$BACKUP_DIR/database"/* /var/lib/pacman-sync-utility/database/ 2>/dev/null || true
+                    chown -R pacman-sync:pacman-sync /var/lib/pacman-sync-utility/database/
+                    
+                    echo "Database rolled back to pre-upgrade state"
+                    echo "Please check the migration log and try upgrading again"
+                else
+                    echo "ERROR: No database backup available for rollback!"
+                    echo "Manual intervention required"
+                fi
+            fi
+        else
+            echo "Warning: Database connectivity test failed, skipping migration"
+            echo "You may need to run migration manually: pacman-sync-server --migrate-db"
+        fi
+    else
+        echo "Warning: pacman-sync-server not found, database migration skipped"
+    fi
+    
+    # Reload systemd daemon to pick up any service file changes
+    echo "Reloading systemd daemon..."
+    systemctl daemon-reload
+    
+    # Update desktop database for application menu integration
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database -q 2>/dev/null || true
+    fi
+    
+    # Update icon cache for proper icon display
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+    fi
+    
+    # Restart services with proper error handling
+    if [ "$SERVER_WAS_RUNNING" = true ] && [ "$MIGRATION_SUCCESS" = true ]; then
+        echo "Restarting server service..."
+        if systemctl start pacman-sync-server; then
+            echo "Server service restarted successfully"
+            
+            # Verify service is healthy
+            sleep 3
+            if ! systemctl is-active --quiet pacman-sync-server; then
+                echo "Warning: Server service failed to start properly"
+                echo "Check logs: journalctl -u pacman-sync-server"
+            fi
+        else
+            echo "ERROR: Failed to restart server service"
+            echo "Check logs: journalctl -u pacman-sync-server"
+            echo "Service can be started manually: systemctl start pacman-sync-server"
+        fi
+    elif [ "$SERVER_WAS_RUNNING" = true ] && [ "$MIGRATION_SUCCESS" = false ]; then
+        echo "Server service not restarted due to migration failure"
+        echo "Please resolve migration issues before starting the service"
+    fi
+    
+    # Clean up old backups (keep last 5 upgrades)
+    echo "Cleaning up old upgrade backups..."
+    if [ -d /var/lib/pacman-sync-utility/backups ]; then
+        cd /var/lib/pacman-sync-utility/backups
+        ls -1t upgrade_* 2>/dev/null | tail -n +6 | xargs rm -rf 2>/dev/null || true
+    fi
+    
+    # Create rollback script for emergency use
+    cat > "/usr/local/bin/pacman-sync-rollback-${UPGRADE_TIMESTAMP}" << EOF
+#!/bin/bash
+# Emergency rollback script for upgrade ${UPGRADE_TIMESTAMP}
+# Generated on $(date)
+
+echo "Rolling back Pacman Sync Utility to pre-upgrade state..."
+
+# Stop services
+systemctl stop pacman-sync-server 2>/dev/null || true
+
+# Restore configuration files
+if [ -d "$BACKUP_DIR/config" ]; then
+    cp "$BACKUP_DIR/config"/* /etc/pacman-sync-utility/ 2>/dev/null || true
+    echo "Configuration files restored"
+fi
+
+# Restore database
+if [ -d "$BACKUP_DIR/database" ] && [ "\$(ls -A "$BACKUP_DIR/database")" ]; then
+    rm -rf /var/lib/pacman-sync-utility/database/*
+    cp -r "$BACKUP_DIR/database"/* /var/lib/pacman-sync-utility/database/ 2>/dev/null || true
+    chown -R pacman-sync:pacman-sync /var/lib/pacman-sync-utility/database/
+    echo "Database restored"
+fi
+
+# Restore service states
+if [ -f "$BACKUP_DIR/service_states.sh" ]; then
+    source "$BACKUP_DIR/service_states.sh"
+    if [ "\$SERVER_WAS_ACTIVE" = "true" ]; then
+        systemctl start pacman-sync-server
+    fi
+    if [ "\$SERVER_WAS_ENABLED" = "true" ]; then
+        systemctl enable pacman-sync-server
+    fi
+fi
+
+echo "Rollback completed. Please downgrade the package to complete the process."
+echo "This script will be automatically removed after successful use."
+rm "\$0"
+EOF
+    
+    chmod 755 "/usr/local/bin/pacman-sync-rollback-${UPGRADE_TIMESTAMP}"
+    chown root:root "/usr/local/bin/pacman-sync-rollback-${UPGRADE_TIMESTAMP}"
+    
+    # Final status report
     echo ""
-    echo "Pacman Sync Utility has been upgraded successfully!"
+    echo "=== Upgrade Summary ==="
+    echo "✓ Pacman Sync Utility has been upgraded successfully!"
     echo ""
-    echo "If you have the client service running, restart it with:"
+    echo "Backup created: $BACKUP_DIR"
+    echo "Rollback script: /usr/local/bin/pacman-sync-rollback-${UPGRADE_TIMESTAMP}"
+    echo ""
+    
+    if [ "$PACNEW_FOUND" = true ]; then
+        echo "⚠ Configuration files require manual review:"
+        for conf_file in client.conf server.conf pools.conf; do
+            if [ -f "/etc/pacman-sync-utility/${conf_file}.pacnew" ]; then
+                echo "  - /etc/pacman-sync-utility/${conf_file}.pacnew"
+            fi
+        done
+        echo ""
+    fi
+    
+    if [ "$MIGRATION_SUCCESS" = false ]; then
+        echo "⚠ Database migration issues detected"
+        echo "  Check migration log: $BACKUP_DIR/migration.log"
+        echo "  Manual migration may be required"
+        echo ""
+    fi
+    
+    echo "Client services (if running) should be restarted by each user:"
     echo "  systemctl --user restart pacman-sync-client"
+    echo ""
+    echo "For emergency rollback, run:"
+    echo "  /usr/local/bin/pacman-sync-rollback-${UPGRADE_TIMESTAMP}"
     echo ""
 }
 

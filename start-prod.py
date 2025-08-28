@@ -17,12 +17,10 @@ os.chdir(project_root)
 if __name__ == "__main__":
     import uvicorn
     
-    # Import the app after setting up the path
-    from server.api.main import app
-    
+    # Use import string format for multi-worker setup
     uvicorn.run(
-        app,
+        "server.api.main:app",
         host="0.0.0.0",
-        port=8080,
+        port=4444,
         workers=4
     )

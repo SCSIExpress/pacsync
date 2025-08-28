@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>pacman-sync-server</Name>
+  <Repository>ghcr.io/scsiexpress/pacman-sync-server:latest</Repository>
+  <Registry>https://ghcr.io/</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/SCSIExpress/pacsync</Support>
+  <Project>https://github.com/SCSIExpress/pacsync</Project>
+  <Overview>Pacman Sync Utility Server - A tool for synchronizing Arch Linux package states across multiple systems.</Overview>
+  <Category>Tools:</Category>
+  <WebUI>http://[IP]:[PORT:4444]</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/SCSIExpress/pacsync/main/docs/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="HTTP Port" Target="4444" Default="4444" Mode="tcp" Description="HTTP port for the web interface" Type="Port" Display="always" Required="true" Mask="false">4444</Config>
+  <Config Name="Database Type" Target="DATABASE_TYPE" Default="internal" Mode="" Description="Database type (internal or postgresql)" Type="Variable" Display="always" Required="false" Mask="false">internal</Config>
+  <Config Name="Database URL" Target="DATABASE_URL" Default="" Mode="" Description="Database connection URL (leave empty for internal database)" Type="Variable" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="HTTP Port (Env)" Target="HTTP_PORT" Default="4444" Mode="" Description="HTTP port environment variable" Type="Variable" Display="advanced" Required="false" Mask="false">4444</Config>
+  <Config Name="HTTP Host" Target="HTTP_HOST" Default="0.0.0.0" Mode="" Description="HTTP host binding" Type="Variable" Display="advanced" Required="false" Mask="false">0.0.0.0</Config>
+  <Config Name="Log Level" Target="LOG_LEVEL" Default="INFO" Mode="" Description="Logging level (DEBUG, INFO, WARNING, ERROR)" Type="Variable" Display="always" Required="false" Mask="false">INFO</Config>
+  <Config Name="Environment" Target="ENVIRONMENT" Default="production" Mode="" Description="Application environment" Type="Variable" Display="advanced" Required="false" Mask="false">production</Config>
+  <Config Name="JWT Secret Key" Target="JWT_SECRET_KEY" Default="" Mode="" Description="JWT secret key for authentication (REQUIRED - generate with: openssl rand -hex 32)" Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="API Rate Limit" Target="API_RATE_LIMIT" Default="100" Mode="" Description="API rate limit per minute" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+  <Config Name="Enable Repository Analysis" Target="ENABLE_REPOSITORY_ANALYSIS" Default="true" Mode="" Description="Enable automatic repository analysis" Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+  <Config Name="Auto Cleanup Old States" Target="AUTO_CLEANUP_OLD_STATES" Default="true" Mode="" Description="Automatically cleanup old package states" Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+  <Config Name="Data Volume" Target="/app/data" Default="/mnt/user/appdata/pacman-sync/data" Mode="rw" Description="Application data storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/pacman-sync/data</Config>
+  <Config Name="Logs Volume" Target="/app/logs" Default="/mnt/user/appdata/pacman-sync/logs" Mode="rw" Description="Application logs storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/pacman-sync/logs</Config>
+  <Config Name="Config Volume" Target="/app/config" Default="/mnt/user/appdata/pacman-sync/config" Mode="rw" Description="Application configuration storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/pacman-sync/config</Config>
+</Container>
